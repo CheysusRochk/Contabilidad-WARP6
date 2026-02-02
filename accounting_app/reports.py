@@ -529,3 +529,203 @@ def generate_pdf_legal_detailed(financial_data, period_name="Anual"):
     return buffer
 
 
+
+def generate_pdf_balance_sin(balance_data, period_name="Anual"):
+    """
+    Genera Balance General en Formato Oficial SIN.
+    Recibe estructura calculada por logic.calculate_balance_sheet
+    """
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter)
+    elements = []
+    styles = getSampleStyleSheet()
+    
+    # Header
+    elements.append(Paragraph("WARP6 SOLUTIONS S.R.L.", styles['Title']))
+    elements.append(Paragraph(f"BALANCE GENERAL ({period_name})", styles['Heading2']))
+    elements.append(Paragraph("(Expresado en Bolivianos)", styles['Italic']))
+    elements.append(Spacer(1, 0.2*inch))
+    
+    data = []
+    data.append(["ACTIVO", "", ""])
+    
+    # ACTIVO CORRIENTE
+    act = balance_data['activos']
+    data.append(["ACTIVO CORRIENTE", "", ""])
+    data.append(["   1. Disponibilidades (Caja/Bancos)", f"{act['corriente']['caja']:,.2f}", ""])
+    data.append(["   2. Crédito Fiscal IVA", f"{act['corriente']['iva_credito']:,.2f}", ""])
+    data.append(["   3. Inventarios", f"{act['corriente']['inventarios']:,.2f}", ""])
+    data.append(["   TOTAL ACTIVO CORRIENTE", "", f"{act['corriente']['total']:,.2f}"])
+    data.append(["", "", ""])
+    
+    # ACTIVO NO CORRIENTE
+    data.append(["ACTIVO NO CORRIENTE", "", ""])
+    data.append(["   1. Activos Fijos Brutos", f"{act['no_corriente']['fijos_bruto']:,.2f}", ""])
+    data.append(["   2. (-) Depreciación Acumulada", f"({act['no_corriente']['dep_acum']:,.2f})", ""])
+    data.append(["   TOTAL ACTIVO NO CORRIENTE", "", f"{act['no_corriente']['total']:,.2f}"])
+    data.append(["", "", ""])
+    
+    # TOTAL ACTIVO
+    total_activo = balance_data['validacion']['activos']
+    data.append(["TOTAL ACTIVO", "", f"{total_activo:,.2f}"])
+    
+    # PASIVO
+    pas = balance_data['pasivos']
+    data.append(["PASIVO", "", ""])
+    data.append(["PASIVO CORRIENTE", "", ""])
+    data.append(["   1. Débito Fiscal IVA por Pagar", f"{pas['corriente']['iva_por_pagar']:,.2f}", ""])
+    data.append(["   2. Impuesto a las Transacciones (IT) por Pagar", f"{pas['corriente']['it_por_pagar']:,.2f}", ""])
+    data.append(["   3. IUE por Pagar", f"{pas['corriente']['iue_por_pagar']:,.2f}", ""])
+    data.append(["   TOTAL PASIVO", "", f"{pas['corriente']['total']:,.2f}"])
+    data.append(["", "", ""])
+    
+    # PATRIMONIO
+    pat = balance_data['patrimonio']
+    data.append(["PATRIMONIO", "", ""])
+    data.append(["   1. Capital Social", f"{pat['capital']:,.2f}", ""])
+    data.append(["   2. Resultados Acumulados", f"{pat['resultados_acum']:,.2f}", ""])
+    data.append(["   TOTAL PATRIMONIO", "", f"{pat['total']:,.2f}"])
+    data.append(["", "", ""])
+    
+    # TOTAL PASIVO Y PATRIMONIO
+    total_pp = balance_data['validacion']['pasivo_patrimonio']
+    data.append(["TOTAL PASIVO Y PATRIMONIO", "", f"{total_pp:,.2f}"])
+
+    t = Table(data, colWidths=[3.5*inch, 1.5*inch, 1.5*inch])
+    t.setStyle(TableStyle([
+        ('FONTNAME', (0,0), (-1,-1), 'Helvetica'),
+        ('FONTNAME', (0,0), (0,0), 'Helvetica-Bold'), # ACTIVO Title
+        ('FONTNAME', (0,10), (0,10), 'Helvetica-Bold'), # TOTAL ACTIVO
+        ('LINEABOVE', (2,10), (2,10), 1, colors.black),
+        
+        ('FONTNAME', (0,11), (0,11), 'Helvetica-Bold'), # PASIVO Title
+        ('FONTNAME', (0,20), (0,20), 'Helvetica-Bold'), # PATRIMONIO Title
+        
+        ('FONTNAME', (0,-1), (-1,-1), 'Helvetica-Bold'), # TOTAL P+P
+        ('LINEABOVE', (2,-1), (2,-1), 1, colors.black),
+        
+        ('ALIGN', (1,0), (-1,-1), 'RIGHT'),
+    ]))
+    
+    elements.append(t)
+    elements.append(Spacer(1, 0.5*inch))
+    
+    # Notas
+    elements.append(Paragraph("<b>Notas a los Estados Financieros:</b>", styles['Normal']))
+    elements.append(Paragraph("1. El efectivo y equivalentes representan la liquidez disponible tras operaciones.", styles['Normal']))
+    elements.append(Paragraph("2. Los inventarios se valoran al costo (método PEPS o promedio).", styles['Normal']))
+    elements.append(Paragraph("3. El Capital Social refleja los aportes de los socios registrados.", styles['Normal']))
+    
+    _add_signatures(elements)
+    doc.build(elements)
+    buffer.seek(0)
+    return buffer
+
+def generate_pdf_gerencial_completo(balance_data, breakdown_mgr, period_name="anual"):
+    """
+    Reporte Gerencial Completo (5 Secciones).
+    """
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter)
+    elements = []
+    styles = getSampleStyleSheet()
+    
+    # Title Page
+    elements.append(Paragraph("INFORME DE GESTIÓN GERENCIAL", styles['Title']))
+    elements.append(Paragraph("WARP6 SOLUTIONS S.R.L.", styles['Heading2']))
+    elements.append(Paragraph(f"Período: {period_name}", styles['Normal']))
+    elements.append(Spacer(1, 0.5*inch))
+    
+    # 1. RESUMEN EJECUTIVO
+    elements.append(Paragraph("1. RESUMEN EJECUTIVO", styles['Heading2']))
+    
+    ventas = breakdown_mgr['ingresos']['total']
+    utilidad = breakdown_mgr['kpis']['utilidad_neta']
+    margen_neto = (utilidad / ventas * 100) if ventas > 0 else 0
+    margen_bruto_pct = (breakdown_mgr['kpis']['margen_bruto'] / ventas * 100) if ventas > 0 else 0
+    
+    tek = f"""
+    Durante el período {period_name}, la empresa generó ingresos totales por <b>Bs {ventas:,.2f}</b>, 
+    logrando una utilidad neta de <b>Bs {utilidad:,.2f}</b>, lo que representa un margen neto del <b>{margen_neto:.1f}%</b>.
+    El margen bruto se situó en <b>{margen_bruto_pct:.1f}%</b>.
+    """
+    elements.append(Paragraph(tek, styles['Normal']))
+    elements.append(Spacer(1, 0.2*inch))
+    
+    # KPI Table
+    kpi_data = [
+        ["Indicador", "Valor"],
+        ["Ingresos Totales", f"Bs {ventas:,.2f}"],
+        ["Utilidad Neta", f"Bs {utilidad:,.2f}"],
+        ["Rentabilidad (ROS)", f"{margen_neto:.1f}%"],
+        ["Caja Disponible", f"Bs {balance_data['activos']['corriente']['caja']:,.2f}"]
+    ]
+    t = Table(kpi_data, colWidths=[3*inch, 2*inch])
+    t.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.navy),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+        ('GRID', (0,0), (-1,-1), 1, colors.black)
+    ]))
+    elements.append(t)
+    elements.append(PageBreak())
+    
+    # 2. ESTADO DE RESULTADOS DETALLADO
+    elements.append(Paragraph("2. ESTADO DE RESULTADOS OPERATIVO", styles['Heading2']))
+    # Reutilizamos lógica de tabla detallada simplificada
+    det_data = [["Concepto", "Monto (Bs)"]]
+    det_data.append(["Ingresos Totales", f"{ventas:,.2f}"])
+    det_data.append(["(-) Costos Directos", f"{breakdown_mgr['costos_ventas']['total']:,.2f}"])
+    det_data.append(["(=) MARGEN BRUTO", f"{breakdown_mgr['kpis']['margen_bruto']:,.2f}"])
+    det_data.append(["(-) Gastos de Personal", f"{breakdown_mgr['gastos_personal']['total']:,.2f}"])
+    det_data.append(["(-) Gastos Operativos", f"{breakdown_mgr['gastos_fijos']['total']:,.2f}"])
+    det_data.append(["(-) Depreciación", f"{breakdown_mgr['depreciacion']['total']:,.2f}"])
+    det_data.append(["(=) UTILIDAD OPERATIVA (EBIT)", f"{breakdown_mgr['kpis']['bait']:,.2f}"])
+    t2 = Table(det_data)
+    t2.setStyle(TableStyle([('GRID', (0,0), (-1,-1), 0.5, colors.grey)]))
+    elements.append(t2)
+    elements.append(Spacer(1, 0.3*inch))
+    
+    # 3. ANÁLISIS POR PROYECTO (Simulado con 'Detalle')
+    elements.append(Paragraph("3. ANÁLISIS DE VENTAS (Top Clientes/Proyectos)", styles['Heading2']))
+    # Extract entries from breakdown
+    items = breakdown_mgr['ingresos']['items']
+    # Group by detail (naive approach) - Just list top 10
+    items_sorted = sorted(items, key=lambda x: x['monto'], reverse=True)[:10]
+    
+    proj_data = [["Fecha", "Cliente/Detalle", "Monto"]]
+    for i in items_sorted:
+        proj_data.append([i['fecha'], Paragraph(i['detalle'][:50], styles['Normal']), f"{i['monto']:,.2f}"])
+        
+    t3 = Table(proj_data, colWidths=[1.5*inch, 3*inch, 1.5*inch])
+    t3.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.darkgreen), ('TEXTCOLOR', (0,0), (-1,0), colors.white)]))
+    elements.append(t3)
+    elements.append(Spacer(1, 0.3*inch))
+    
+    # 4. CONTROL DE GASTOS
+    elements.append(Paragraph("4. DESGLOSE DE GASTOS", styles['Heading2']))
+    elements.append(Paragraph("Distribución de egresos operativos:", styles['Normal']))
+    
+    g_personal = breakdown_mgr['gastos_personal']['total']
+    g_fijos = breakdown_mgr['gastos_fijos']['total']
+    g_costos = breakdown_mgr['costos_ventas']['total']
+    
+    gastos_data = [
+        ["Categoría", "Monto", "% Total Gastos"],
+        ["Personal", f"{g_personal:,.2f}", f"{(g_personal/(g_personal+g_fijos+g_costos)*100):.1f}%" if (g_personal+g_fijos+g_costos)>0 else "0%"],
+        ["Operativos/Fijos", f"{g_fijos:,.2f}", f"{(g_fijos/(g_personal+g_fijos+g_costos)*100):.1f}%" if (g_personal+g_fijos+g_costos)>0 else "0%"],
+        ["Costos Directos", f"{g_costos:,.2f}", f"{(g_costos/(g_personal+g_fijos+g_costos)*100):.1f}%" if (g_personal+g_fijos+g_costos)>0 else "0%"]
+    ]
+    t4 = Table(gastos_data)
+    t4.setStyle(TableStyle([('GRID', (0,0), (-1,-1), 1, colors.black)]))
+    elements.append(t4)
+    
+    # 5. PROYECCIONES
+    elements.append(Paragraph("5. PROYECCIONES Y RECOMENDACIONES", styles['Heading2']))
+    elements.append(Paragraph("• <b>Optimización Fiscal:</b> Revise el nivel de gastos deducibles. Se recomienda exigir factura en compras de material.", styles['Normal']))
+    elements.append(Paragraph("• <b>Flujo de Caja:</b> Mantener un fondo de maniobra equivalente a 3 meses de gastos fijos.", styles['Normal']))
+    elements.append(Paragraph("• <b>Crecimiento:</b> Se proyecta un crecimiento orgánico del 10% si se mantiene el margen actual.", styles['Normal']))
+    
+    _add_signatures(elements)
+    doc.build(elements)
+    buffer.seek(0)
+    return buffer

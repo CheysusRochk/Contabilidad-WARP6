@@ -1,4 +1,5 @@
 from datetime import datetime
+import pandas as pd
 
 # Constantes Normativa Boliviana
 IVA_RATE = 0.13
@@ -139,3 +140,141 @@ def calculate_period_depreciation(assets_df, months=12):
         total_dep += annual_dep
         
     return total_dep if months == 12 else (total_dep / 12) * months
+
+def calculate_balance_sheet(df, assets_df, cutoff_date=None):
+    """
+    Calcula todos los componentes del Balance General asegurando que cuadre.
+    Activo = Pasivo + Patrimonio
+    """
+    if cutoff_date:
+        # Convertir a datetime para filtrar
+        if not pd.api.types.is_datetime64_any_dtype(df['fecha']):
+             df['fecha_dt'] = pd.to_datetime(df['fecha'])
+        else:
+             df['fecha_dt'] = df['fecha']
+        
+        # Filtro hasta la fecha de corte
+        df = df[df['fecha_dt'] <= pd.to_datetime(cutoff_date)]
+    
+    # 1. Calcular Flujos de Efectivo (Caja)
+    # Caja = Aportes + Ingresos(Brutos) - Gastos(Brutos)
+    
+    # Identificar Aportes
+    is_aporte = df['categoria'].str.lower().str.contains('aporte', na=False) & \
+                df['categoria'].str.lower().str.contains('capital', na=False)
+    
+    total_aportes = df[is_aporte]['monto'].sum()
+    
+    # Ingresos Operativos (Entrada de dinero) - Excluye aportes
+    ingresos = df[(df['tipo'] == 'Ingreso') & (~is_aporte)]['monto'].sum()
+    
+    # Gastos Totales (Salida de dinero)
+    gastos = df[df['tipo'] == 'Gasto']['monto'].sum()
+    
+    caja_final = total_aportes + ingresos - gastos
+    
+    # 2. Activos No Corrientes (Netos)
+    valor_activos = assets_df['valor_inicial'].sum() if not assets_df.empty else 0
+    dep_acumulada = calculate_period_depreciation(assets_df, 12) # Simplificación Anual
+    activos_netos = valor_activos - dep_acumulada
+    
+    # 3. Impuestos (Pasivos)
+    iva_df_total = 0
+    iva_cf_total = 0
+    it_total = 0
+    
+    # Iterar para calcular impuestos acumulados
+    for _, row in df.iterrows():
+        taxes = calculate_taxes(row['monto'], row['tipo'], row['tiene_factura'], row['categoria'])
+        if row['tipo'] == 'Ingreso':
+             if "aporte" not in row['categoria'].lower():
+                iva_df_total += taxes['iva_df']
+                it_total += taxes['it']
+        elif row['tipo'] == 'Gasto' and row['tiene_factura']:
+            iva_cf_total += taxes['iva_cf']
+
+    # Pasivos Tributarios
+    iva_por_pagar = max(0, iva_df_total - iva_cf_total)
+    iva_credito_fiscal = max(0, iva_cf_total - iva_df_total) # Activo Corriente
+    
+    it_por_pagar = it_total 
+    
+    # 4. Estado de Resultados (Para Patrimonio)
+    # DEBE COINCIDIR CON EL ESTADO DE RESULTADOS PROVISIONAL
+    
+    # Ingresos Netos (87% para facturados)
+    ingresos_netos = ingresos - iva_df_total
+    
+    # Gastos Netos (87% para facturados, 100% para no facturados)
+    gastos_con_factura_netos = 0
+    gastos_sin_factura_total = 0
+    
+    for _, row in df[df['tipo'] == 'Gasto'].iterrows():
+        if row['tiene_factura']:
+            gastos_con_factura_netos += row['monto'] * 0.87  # Gasto neto (sin IVA)
+        else:
+            gastos_sin_factura_total += row['monto']  # Gasto no deducible
+    
+    # Total de gastos netos para el estado de resultados
+    gastos_netos_totales = gastos_con_factura_netos + gastos_sin_factura_total
+    
+    # Utilidad Operativa (antes de IT e IUE)
+    # Formula: Ingresos Netos - Gastos Netos - Depreciación - IT
+    utilidad_operativa = ingresos_netos - gastos_netos_totales - dep_acumulada - it_total
+    
+    # Para IUE, los gastos sin factura NO son deducibles
+    # Base Imponible = Ingresos Netos - Gastos Deducibles - Depreciación - IT
+    # Gastos Deducibles = solo los que tienen factura
+    utilidad_imponible = ingresos_netos - gastos_con_factura_netos - dep_acumulada - it_total
+    
+    if utilidad_imponible < 0:
+        utilidad_imponible = 0
+    
+    iue_por_pagar = utilidad_imponible * 0.25
+    utilidad_neta = utilidad_operativa - iue_por_pagar
+    
+    # 5. Estructura Final
+    balance = {
+        'activos': {
+            'corriente': {
+                'caja': caja_final,
+                'iva_credito': iva_credito_fiscal,
+                'inventarios': 0, 
+                'total': caja_final + iva_credito_fiscal
+            },
+            'no_corriente': {
+                'fijos_bruto': valor_activos,
+                'dep_acum': dep_acumulada,
+                'fijos_neto': activos_netos,
+                'total': activos_netos
+            }
+        },
+        'pasivos': {
+            'corriente': {
+                'iva_por_pagar': iva_por_pagar,
+                'it_por_pagar': it_por_pagar,
+                'iue_por_pagar': iue_por_pagar,
+                'total': iva_por_pagar + it_por_pagar + iue_por_pagar
+            }
+        },
+        'patrimonio': {
+            'capital': total_aportes,
+            'resultados_acum': utilidad_neta,
+            'total': total_aportes + utilidad_neta
+        }
+    }
+    
+    # Ajuste de Cuadratura
+    total_activos = balance['activos']['corriente']['total'] + balance['activos']['no_corriente']['total']
+    total_pasivos = balance['pasivos']['corriente']['total']
+    total_patrimonio = balance['patrimonio']['total']
+    
+    diferencia = total_activos - (total_pasivos + total_patrimonio)
+    balance['validacion'] = {
+        'activos': total_activos,
+        'pasivo_patrimonio': total_pasivos + total_patrimonio,
+        'diferencia': diferencia,
+        'cuadra': abs(diferencia) < 1.0
+    }
+    
+    return balance

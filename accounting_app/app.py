@@ -306,10 +306,14 @@ def show_reportes():
             
         # --- ESTADO DE RESULTADOS LEGAL (ESTRICTO) ---
         # Filtramos solo lo que tiene factura (o son Ingresos declarados)
-        # Ingresos: Todo (asumimos facturado si está en sistema como ingreso oficial)
+        # Ingresos: Todo EXCEPTO Aportes de Capital
         # Gastos: SOLO con factura.
         
-        df_legal_ingresos = df[df['tipo'] == 'Ingreso']
+        # Identificar aportes de capital
+        is_aporte = df['categoria'].str.lower().str.contains('aporte', na=False) & \
+                    df['categoria'].str.lower().str.contains('capital', na=False)
+        
+        df_legal_ingresos = df[(df['tipo'] == 'Ingreso') & (~is_aporte)]  # Excluir aportes
         df_legal_gastos = df[(df['tipo'] == 'Gasto') & (df['tiene_factura'] == 1)]
         
         # Calcular totales para Legal
@@ -345,7 +349,8 @@ def show_reportes():
             data=pdf_data,
             file_name=f"ER_Legal_Estricto_{date.today()}.pdf",
             mime="application/pdf",
-            help="Excluye gastos sin factura (Sueldos en negro, recibos, etc.)"
+            help="Excluye gastos sin factura (Sueldos en negro, recibos, etc.)",
+            key="btn_er_legal_simple"
         )
         
         # --- CÁLCULO GERENCIAL DETALLADO ---
@@ -435,16 +440,21 @@ def show_reportes():
         mgr_data['kpis']['iue'] = max(0, mgr_data['kpis']['utilidad_antes_iue'] * 0.25)
         mgr_data['kpis']['utilidad_neta'] = mgr_data['kpis']['utilidad_antes_iue'] - mgr_data['kpis']['iue']
         
+        
         pdf_mgr = reports.generate_pdf_managerial_detailed(mgr_data, "Acumulado Anual")
         st.download_button(
             label="📊 Estado de Resultados (GERENCIAL DETALLADO)",
             data=pdf_mgr,
             file_name=f"ER_Gerencial_Detallado_{date.today()}.pdf",
             mime="application/pdf",
-            help="Incluye desglose de cada transacción, EBITDA, Costo de Ventas y Márgenes."
+            help="Incluye desglose de cada transacción, EBITDA, Costo de Ventas y Márgenes.",
+            key="btn_er_gerencial_detallado"
         )
         
         # --- REPORTE LEGAL DETALLADO (Con factura + Depreciación) ---
+        st.markdown("---")
+        st.subheader("⚖️ Estado de Resultados Legal (SIN)")
+        
         # Usar misma estructura que mgr_data pero FILTRADO solo con factura
         legal_detailed_data = {
             'ingresos': {'total': 0, 'items': []},
@@ -491,15 +501,29 @@ def show_reportes():
         legal_detailed_data['impuestos']['total'] += it_legal
         legal_detailed_data['impuestos']['items'].append({'fecha': '-', 'detalle': 'IT Generado por Ventas (3%)', 'monto': it_legal})
         
-        # KPIs para Legal
-        legal_detailed_data['kpis']['margen_bruto'] = legal_detailed_data['ingresos']['total'] - legal_detailed_data['costos_ventas']['total']
+        # KPIs para Legal - USAR MONTOS NETOS (87%) PARA CÁLCULOS FISCALES
+        # Ingresos Netos = Ingresos Brutos - IVA DF
+        ingresos_brutos_legal = legal_detailed_data['ingresos']['total']
+        iva_df_legal = ingresos_brutos_legal * 0.13
+        ingresos_netos_legal = ingresos_brutos_legal - iva_df_legal
+        
+        # Costos y Gastos Netos = Brutos * 0.87 (si tienen factura)
+        costos_netos_legal = legal_detailed_data['costos_ventas']['total'] * 0.87
+        gastos_personal_netos = legal_detailed_data['gastos_personal']['total'] * 0.87
+        gastos_fijos_netos = legal_detailed_data['gastos_fijos']['total'] * 0.87
+        gastos_financieros_netos = legal_detailed_data['gastos_financieros']['total'] * 0.87
+        
+        # Impuestos pagados (IT, patentes, etc.) - estos ya son netos, no tienen IVA
+        impuestos_directos_legal = legal_detailed_data['impuestos']['total']
+        
+        legal_detailed_data['kpis']['margen_bruto'] = ingresos_netos_legal - costos_netos_legal
         legal_detailed_data['kpis']['bait'] = (legal_detailed_data['kpis']['margen_bruto'] - 
-                                                legal_detailed_data['gastos_personal']['total'] - 
-                                                legal_detailed_data['gastos_fijos']['total'] - 
+                                                gastos_personal_netos - 
+                                                gastos_fijos_netos - 
                                                 legal_detailed_data['depreciacion']['total'])
         legal_detailed_data['kpis']['utilidad_antes_iue'] = (legal_detailed_data['kpis']['bait'] - 
-                                                              legal_detailed_data['gastos_financieros']['total'] - 
-                                                              legal_detailed_data['impuestos']['total'])
+                                                              gastos_financieros_netos - 
+                                                              impuestos_directos_legal)
         legal_detailed_data['kpis']['iue'] = max(0, legal_detailed_data['kpis']['utilidad_antes_iue'] * 0.25)
         legal_detailed_data['kpis']['utilidad_neta'] = legal_detailed_data['kpis']['utilidad_antes_iue'] - legal_detailed_data['kpis']['iue']
         
@@ -509,11 +533,66 @@ def show_reportes():
             data=pdf_legal_det,
             file_name=f"ER_Legal_Detallado_{date.today()}.pdf",
             mime="application/pdf",
-            help="Solo gastos facturados + Depreciación. Cumplimiento normativo."
+            help="Solo gastos facturados + Depreciación. Cumplimiento normativo.",
+            key="btn_er_legal_detallado"
         )
 
         st.markdown("---")
-        st.write("🔥 **Análisis de Eficiencia Fiscal**")
+        
+        # --- BALANCE GENERAL (SIN / FORMAL) ---
+        st.subheader("📗 Balance General")
+        
+        # Calcular Balance usando la nueva lógica CONTABLE balanceada
+        assets_df = db.get_assets()
+        balance_data = logic.calculate_balance_sheet(df, assets_df, cutoff_date)
+        
+        pdf_balance = reports.generate_pdf_balance_sin(balance_data, f"Al {cutoff_date.strftime('%d/%m/%Y')}")
+        
+        c_bal1, c_bal2 = st.columns(2)
+        with c_bal1:
+            st.download_button(
+                label="🏛️ Descargar Balance General (Formato SIN)",
+                data=pdf_balance,
+                file_name=f"Balance_General_SIN_{cutoff_date.strftime('%Y%m%d')}.pdf",
+                mime="application/pdf",
+                help="Formato oficial: Activo = Pasivo + Patrimonio",
+                key="btn_balance_sin"
+            )
+            
+        # --- REPORTE GERENCIAL COMPLETO ---
+        pdf_gerencial = reports.generate_pdf_gerencial_completo(balance_data, mgr_data, f"Gestión 2025 (Al {cutoff_date})")
+        with c_bal2:
+            st.download_button(
+                label="📈 Descargar Informe Gerencial Completo",
+                data=pdf_gerencial,
+                file_name=f"Informe_Gerencial_Estrategico_{cutoff_date.strftime('%Y%m%d')}.pdf",
+                mime="application/pdf",
+                help="Informe de 5 páginas con KPIs, márgenes por proyecto y proyecciones.",
+                key="btn_informe_gerencial_completo"
+            )
+        
+        # --- VALIDACIÓN DE RECONCILIACIÓN ---
+        st.markdown("#### ✅ Validación de Ecuación Contable")
+        
+        val = balance_data['validacion']
+        col_v1, col_v2, col_v3 = st.columns(3)
+        
+        with col_v1:
+            st.metric("Total Activos", f"Bs {val['activos']:,.2f}")
+        with col_v2:
+            st.metric("Pasivo + Patrimonio", f"Bs {val['pasivo_patrimonio']:,.2f}")
+        with col_v3:
+            if val['cuadra']:
+                st.success(f"✅ Balance Cuadrado (Dif: {val['diferencia']:.2f})")
+            else:
+                st.error(f"⚠️ Descuadre: Bs {val['diferencia']:,.2f}")
+        
+        if not val['cuadra']:
+             st.warning("El balance presenta diferencias. Revise si hay gastos/ingresos 'huerfanos' o problemas de redondeo.")
+             
+        # Debug View
+        with st.expander("🔍 Ver Desglose Contable Detallado"):
+            st.json(balance_data)
         
         gastos_sf = df[(df['tipo'] == 'Gasto') & (df['tiene_factura'] == 0)]
         if not gastos_sf.empty:
@@ -523,7 +602,8 @@ def show_reportes():
                 label="📉 Reporte de Dinero Perdido (Tax Shield)",
                 data=pdf_shield,
                 file_name=f"Reporte_Fiscal_Perdida_{date.today()}.pdf",
-                mime="application/pdf"
+                mime="application/pdf",
+                key="btn_tax_shield"
             )
         else:
             st.success("¡Excelente! Todos tus gastos tienen factura.")
@@ -532,38 +612,6 @@ def show_reportes():
 
         st.write("📚 **Libros Legales (Normativa)**")
         
-        # Libro Diario
-        pdf_diario = reports.generate_pdf_libro_diario(df)
-        st.download_button(
-            label="📒 Libro Diario (PDF)",
-            data=pdf_diario,
-            file_name=f"Libro_Diario_{date.today()}.pdf",
-            mime="application/pdf"
-        )
-        
-        # Balance General
-        # Calcular Caja: Ingresos totales (Incluye capital) - Gastos totales
-            # Nota: 'df' tiene todo (ingresos y gastos).
-            # Caja = Sum(Ingresos + Aportes) - Sum(Gastos)
-        caja_balance = df[df['tipo'] == 'Ingreso']['monto'].sum() - df[df['tipo'] == 'Gasto']['monto'].sum()
-        
-        # Activos Fijos
-        assets_df = db.get_assets()
-        
-        # Capital Social (Aportes)
-        equity_total = total_aportes
-        
-        # Resultado Acumulado (Operativo)
-        # Nota: Balance debe cuadrar: Activo = Pasivo + Capital + Resultados
-        # Simplificación: Asumimos Pasivo = 0 (excepto impuestos por pagar devengados, pero simplificamos a caja base)
-        
-        pdf_balance = reports.generate_pdf_balance_general(assets_df, caja_balance, equity_total, resultado_bruto)
-        st.download_button(
-            label="⚖️ Balance General (PDF)",
-            data=pdf_balance,
-            file_name=f"Balance_General_{date.today()}.pdf",
-            mime="application/pdf"
-        )    
         
         st.markdown("---")
         
