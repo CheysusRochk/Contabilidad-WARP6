@@ -143,7 +143,8 @@ def calculate_period_depreciation(assets_df, months=12):
 
 def calculate_balance_sheet(df, assets_df, cutoff_date=None):
     """
-    Calcula todos los componentes del Balance General asegurando que cuadre.
+    Calcula Balance General para el SIN (Solo Operaciones Facturadas).
+    Este balance refleja la REALIDAD FISCAL, no la realidad de caja.
     Activo = Pasivo + Patrimonio
     """
     if cutoff_date:
@@ -156,84 +157,75 @@ def calculate_balance_sheet(df, assets_df, cutoff_date=None):
         # Filtro hasta la fecha de corte
         df = df[df['fecha_dt'] <= pd.to_datetime(cutoff_date)]
     
-    # 1. Calcular Flujos de Efectivo (Caja)
-    # Caja = Aportes + Ingresos(Brutos) - Gastos(Brutos)
-    
-    # Identificar Aportes
+    # ========== FILTRAR SOLO TRANSACCIONES FACTURADAS (PARA SIN) ==========
+    # Identificar Aportes de Capital (siempre van, no necesitan factura)
     is_aporte = df['categoria'].str.lower().str.contains('aporte', na=False) & \
                 df['categoria'].str.lower().str.contains('capital', na=False)
     
+    # Ingresos: todos tienen factura (requisito para emitir)
+    ingresos_facturados = df[(df['tipo'] == 'Ingreso') & (~is_aporte)]
+    
+    # Gastos: SOLO los que tienen factura (deducibles)
+    gastos_facturados = df[(df['tipo'] == 'Gasto') & (df['tiene_factura'] == 1)]
+    
+    # Capital Social
     total_aportes = df[is_aporte]['monto'].sum()
     
-    # Ingresos Operativos (Entrada de dinero) - Excluye aportes
-    ingresos = df[(df['tipo'] == 'Ingreso') & (~is_aporte)]['monto'].sum()
+    # ========== 1. CÁLCULO DE CAJA (Solo transacciones fiscales) ==========
+    # Ingresos brutos facturados
+    ingresos_brutos = ingresos_facturados['monto'].sum()
     
-    # Gastos Totales (Salida de dinero)
-    gastos = df[df['tipo'] == 'Gasto']['monto'].sum()
+    # Gastos brutos facturados
+    gastos_brutos_fiscales = gastos_facturados['monto'].sum()
     
-    caja_final = total_aportes + ingresos - gastos
+    # Caja Fiscal = Aportes + Ingresos - Gastos (solo facturados)
+    caja_final = total_aportes + ingresos_brutos - gastos_brutos_fiscales
     
-    # 2. Activos No Corrientes (Netos)
+    # ========== 2. ACTIVOS FIJOS ==========
     valor_activos = assets_df['valor_inicial'].sum() if not assets_df.empty else 0
-    dep_acumulada = calculate_period_depreciation(assets_df, 12) # Simplificación Anual
+    dep_acumulada = calculate_period_depreciation(assets_df, 12)
     activos_netos = valor_activos - dep_acumulada
     
-    # 3. Impuestos (Pasivos)
+    # ========== 3. IMPUESTOS (PASIVOS) ==========
     iva_df_total = 0
     iva_cf_total = 0
     it_total = 0
     
-    # Iterar para calcular impuestos acumulados
-    for _, row in df.iterrows():
-        taxes = calculate_taxes(row['monto'], row['tipo'], row['tiene_factura'], row['categoria'])
-        if row['tipo'] == 'Ingreso':
-             if "aporte" not in row['categoria'].lower():
-                iva_df_total += taxes['iva_df']
-                it_total += taxes['it']
-        elif row['tipo'] == 'Gasto' and row['tiene_factura']:
-            iva_cf_total += taxes['iva_cf']
-
+    # Calcular IVA e IT sobre transacciones facturadas
+    for _, row in ingresos_facturados.iterrows():
+        taxes = calculate_taxes(row['monto'], row['tipo'], True, row['categoria'])
+        iva_df_total += taxes['iva_df']
+        it_total += taxes['it']
+    
+    for _, row in gastos_facturados.iterrows():
+        taxes = calculate_taxes(row['monto'], row['tipo'], True, row['categoria'])
+        iva_cf_total += taxes['iva_cf']
+    
     # Pasivos Tributarios
     iva_por_pagar = max(0, iva_df_total - iva_cf_total)
-    iva_credito_fiscal = max(0, iva_cf_total - iva_df_total) # Activo Corriente
+    iva_credito_fiscal = max(0, iva_cf_total - iva_df_total)
+    it_por_pagar = it_total
     
-    it_por_pagar = it_total 
+    # ========== 4. ESTADO DE RESULTADOS FISCAL (Para Patrimonio) ==========
+    # Ingresos Netos = Ingresos Brutos - IVA DF
+    ingresos_netos_fiscales = ingresos_brutos - iva_df_total
     
-    # 4. Estado de Resultados (Para Patrimonio)
-    # DEBE COINCIDIR CON EL ESTADO DE RESULTADOS PROVISIONAL
+    # Gastos Netos = Gastos Facturados * 0.87
+    gastos_netos_fiscales = gastos_brutos_fiscales * 0.87
     
-    # Ingresos Netos (87% para facturados)
-    ingresos_netos = ingresos - iva_df_total
+    # Utilidad antes de IT e IUE
+    utilidad_antes_it = ingresos_netos_fiscales - gastos_netos_fiscales - dep_acumulada
     
-    # Gastos Netos (87% para facturados, 100% para no facturados)
-    gastos_con_factura_netos = 0
-    gastos_sin_factura_total = 0
+    # Restar IT
+    utilidad_antes_iue = utilidad_antes_it - it_total
     
-    for _, row in df[df['tipo'] == 'Gasto'].iterrows():
-        if row['tiene_factura']:
-            gastos_con_factura_netos += row['monto'] * 0.87  # Gasto neto (sin IVA)
-        else:
-            gastos_sin_factura_total += row['monto']  # Gasto no deducible
+    # Calcular IUE (25%)
+    iue_por_pagar = max(0, utilidad_antes_iue * 0.25)
     
-    # Total de gastos netos para el estado de resultados
-    gastos_netos_totales = gastos_con_factura_netos + gastos_sin_factura_total
+    # Utilidad Neta Fiscal
+    utilidad_neta_fiscal = utilidad_antes_iue - iue_por_pagar
     
-    # Utilidad Operativa (antes de IT e IUE)
-    # Formula: Ingresos Netos - Gastos Netos - Depreciación - IT
-    utilidad_operativa = ingresos_netos - gastos_netos_totales - dep_acumulada - it_total
-    
-    # Para IUE, los gastos sin factura NO son deducibles
-    # Base Imponible = Ingresos Netos - Gastos Deducibles - Depreciación - IT
-    # Gastos Deducibles = solo los que tienen factura
-    utilidad_imponible = ingresos_netos - gastos_con_factura_netos - dep_acumulada - it_total
-    
-    if utilidad_imponible < 0:
-        utilidad_imponible = 0
-    
-    iue_por_pagar = utilidad_imponible * 0.25
-    utilidad_neta = utilidad_operativa - iue_por_pagar
-    
-    # 5. Estructura Final
+    # ========== 5. ESTRUCTURA DEL BALANCE ==========
     balance = {
         'activos': {
             'corriente': {
@@ -259,12 +251,133 @@ def calculate_balance_sheet(df, assets_df, cutoff_date=None):
         },
         'patrimonio': {
             'capital': total_aportes,
-            'resultados_acum': utilidad_neta,
-            'total': total_aportes + utilidad_neta
+            'resultados_acum': utilidad_neta_fiscal,
+            'total': total_aportes + utilidad_neta_fiscal
         }
     }
     
-    # Ajuste de Cuadratura
+    # ========== 6. VALIDACIÓN DE ECUACIÓN CONTABLE ==========
+    total_activos = balance['activos']['corriente']['total'] + balance['activos']['no_corriente']['total']
+    total_pasivos = balance['pasivos']['corriente']['total']
+    total_patrimonio = balance['patrimonio']['total']
+    
+    diferencia = total_activos - (total_pasivos + total_patrimonio)
+    balance['validacion'] = {
+        'activos': total_activos,
+        'pasivo_patrimonio': total_pasivos + total_patrimonio,
+        'diferencia': diferencia,
+        'cuadra': abs(diferencia) < 1.0
+    }
+    
+    return balance
+
+def calculate_balance_sheet_real(df, assets_df, cutoff_date=None):
+    """
+    Calcula Balance General REAL (Gerencial).
+    Muestra la realidad de caja incluyendo TODOS los gastos (con y sin factura),
+    pero mantiene la Utilidad Fiscal para efectos tributarios.
+    """
+    if cutoff_date:
+        if not pd.api.types.is_datetime64_any_dtype(df['fecha']):
+             df['fecha_dt'] = pd.to_datetime(df['fecha'])
+        else:
+             df['fecha_dt'] = df['fecha']
+        df = df[df['fecha_dt'] <= pd.to_datetime(cutoff_date)]
+    
+    # Identificar Aportes
+    is_aporte = df['categoria'].str.lower().str.contains('aporte', na=False) & \
+                df['categoria'].str.lower().str.contains('capital', na=False)
+    
+    total_aportes = df[is_aporte]['monto'].sum()
+    
+    # ========== 1. CAJA REAL (Todos los movimientos) ==========
+    ingresos_total = df[(df['tipo'] == 'Ingreso') & (~is_aporte)]['monto'].sum()
+    gastos_total = df[df['tipo'] == 'Gasto']['monto'].sum()
+    
+    # Caja Real = Aportes + Ingresos - TODOS los Gastos
+    caja_real = total_aportes + ingresos_total - gastos_total
+    
+    # ========== 2. ACTIVOS FIJOS ==========
+    valor_activos = assets_df['valor_inicial'].sum() if not assets_df.empty else 0
+    dep_acumulada = calculate_period_depreciation(assets_df, 12)
+    activos_netos = valor_activos - dep_acumulada
+    
+    # ========== 3. IMPUESTOS (Solo sobre facturados) ==========
+    ingresos_facturados = df[(df['tipo'] == 'Ingreso') & (~is_aporte)]
+    gastos_facturados = df[(df['tipo'] == 'Gasto') & (df['tiene_factura'] == 1)]
+    
+    iva_df_total = 0
+    iva_cf_total = 0
+    it_total = 0
+    
+    for _, row in ingresos_facturados.iterrows():
+        taxes = calculate_taxes(row['monto'], row['tipo'], True, row['categoria'])
+        iva_df_total += taxes['iva_df']
+        it_total += taxes['it']
+    
+    for _, row in gastos_facturados.iterrows():
+        taxes = calculate_taxes(row['monto'], row['tipo'], True, row['categoria'])
+        iva_cf_total += taxes['iva_cf']
+    
+    iva_por_pagar = max(0, iva_df_total - iva_cf_total)
+    iva_credito_fiscal = max(0, iva_cf_total - iva_df_total)
+    it_por_pagar = it_total
+    
+    # ========== 4. UTILIDAD FISCAL (Para IUE) ==========
+    # Calcular igual que balance SIN (solo facturados)
+    ingresos_brutos_facturados = ingresos_facturados['monto'].sum()
+    gastos_brutos_facturados = gastos_facturados['monto'].sum()
+    
+    ingresos_netos_fiscales = ingresos_brutos_facturados - iva_df_total
+    gastos_netos_fiscales = gastos_brutos_facturados * 0.87
+    
+    utilidad_antes_it = ingresos_netos_fiscales - gastos_netos_fiscales - dep_acumulada
+    utilidad_antes_iue = utilidad_antes_it - it_total
+    iue_por_pagar = max(0, utilidad_antes_iue * 0.25)
+    utilidad_neta_fiscal = utilidad_antes_iue - iue_por_pagar
+    
+    # ========== 5. GASTOS NO DEDUCIBLES (Ajuste) ==========
+    # Gastos sin factura que reducen la caja pero no la utilidad fiscal
+    gastos_sin_factura = df[(df['tipo'] == 'Gasto') & (df['tiene_factura'] == 0)]['monto'].sum()
+    
+    # ========== 6. ESTRUCTURA DEL BALANCE REAL ==========
+    balance = {
+        'activos': {
+            'corriente': {
+                'caja': caja_real,  # Caja REAL
+                'iva_credito': iva_credito_fiscal,
+                'inventarios': 0,
+                'total': caja_real + iva_credito_fiscal
+            },
+            'no_corriente': {
+                'fijos_bruto': valor_activos,
+                'dep_acum': dep_acumulada,
+                'fijos_neto': activos_netos,
+                'total': activos_netos
+            }
+        },
+        'pasivos': {
+            'corriente': {
+                'iva_por_pagar': iva_por_pagar,
+                'it_por_pagar': it_por_pagar,
+                'iue_por_pagar': iue_por_pagar,
+                'total': iva_por_pagar + it_por_pagar + iue_por_pagar
+            }
+        },
+        'patrimonio': {
+            'capital': total_aportes,
+            'utilidad_fiscal': utilidad_neta_fiscal,  # Utilidad LEGAL (para impuestos)
+            'gastos_no_deducibles': -gastos_sin_factura,  # Ajuste negativo
+            'resultados_acum': utilidad_neta_fiscal - gastos_sin_factura,  # Resultado Real
+            'total': total_aportes + utilidad_neta_fiscal - gastos_sin_factura
+        },
+        'info_adicional': {
+            'gastos_sin_factura': gastos_sin_factura,
+            'utilidad_fiscal_declarada': utilidad_neta_fiscal
+        }
+    }
+    
+    # Validación
     total_activos = balance['activos']['corriente']['total'] + balance['activos']['no_corriente']['total']
     total_pasivos = balance['pasivos']['corriente']['total']
     total_patrimonio = balance['patrimonio']['total']

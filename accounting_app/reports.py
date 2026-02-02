@@ -729,3 +729,99 @@ def generate_pdf_gerencial_completo(balance_data, breakdown_mgr, period_name="an
     doc.build(elements)
     buffer.seek(0)
     return buffer
+    _add_signatures(elements)
+    doc.build(elements)
+    buffer.seek(0)
+    return buffer
+
+def generate_pdf_balance_real(balance_data, period_name="Anual"):
+    """
+    Genera Balance General REAL/GERENCIAL.
+    Muestra la caja real y los gastos no deducibles como ajuste.
+    """
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter)
+    elements = []
+    styles = getSampleStyleSheet()
+    
+    # Header
+    elements.append(Paragraph("WARP6 SOLUTIONS S.R.L.", styles['Title']))
+    elements.append(Paragraph(f"BALANCE GENERAL GERENCIAL ({period_name})", styles['Heading2']))
+    elements.append(Paragraph("(Expresado en Bolivianos - Refleja Realidad de Caja)", styles['Italic']))
+    elements.append(Spacer(1, 0.2*inch))
+    
+    data = []
+    data.append(["ACTIVO", "", ""])
+    
+    # ACTIVO CORRIENTE
+    act = balance_data['activos']
+    data.append(["ACTIVO CORRIENTE", "", ""])
+    data.append(["   1. Disponibilidades (Caja/Bancos REAL)", f"{act['corriente']['caja']:,.2f}", ""])
+    data.append(["   2. Crédito Fiscal IVA", f"{act['corriente']['iva_credito']:,.2f}", ""])
+    data.append(["   3. Inventarios", f"{act['corriente']['inventarios']:,.2f}", ""])
+    data.append(["   TOTAL ACTIVO CORRIENTE", "", f"{act['corriente']['total']:,.2f}"])
+    data.append(["", "", ""])
+    
+    # ACTIVO NO CORRIENTE
+    data.append(["ACTIVO NO CORRIENTE", "", ""])
+    data.append(["   1. Activos Fijos Brutos", f"{act['no_corriente']['fijos_bruto']:,.2f}", ""])
+    data.append(["   2. (-) Depreciación Acumulada", f"({act['no_corriente']['dep_acum']:,.2f})", ""])
+    data.append(["   TOTAL ACTIVO NO CORRIENTE", "", f"{act['no_corriente']['total']:,.2f}"])
+    data.append(["", "", ""])
+    
+    # TOTAL ACTIVO
+    total_activo = balance_data['validacion']['activos']
+    data.append(["TOTAL ACTIVO", "", f"{total_activo:,.2f}"])
+    
+    # PASIVO
+    pas = balance_data['pasivos']
+    data.append(["PASIVO", "", ""])
+    data.append(["PASIVO CORRIENTE", "", ""])
+    data.append(["   1. Débito Fiscal IVA por Pagar", f"{pas['corriente']['iva_por_pagar']:,.2f}", ""])
+    data.append(["   2. Impuesto a las Transacciones (IT) por Pagar", f"{pas['corriente']['it_por_pagar']:,.2f}", ""])
+    data.append(["   3. IUE por Pagar (25% s/Utilidad Fiscal)", f"{pas['corriente']['iue_por_pagar']:,.2f}", ""])
+    data.append(["   TOTAL PASIVO", "", f"{pas['corriente']['total']:,.2f}"])
+    data.append(["", "", ""])
+    
+    # PATRIMONIO
+    pat = balance_data['patrimonio']
+    data.append(["PATRIMONIO", "", ""])
+    data.append(["   1. Capital Social", f"{pat['capital']:,.2f}", ""])
+    data.append(["   2. Utilidad Neta Fiscal (Declarada)", f"{pat['utilidad_fiscal']:,.2f}", ""])
+    data.append(["   3. (-) Gastos No Deducibles (sin factura)", f"({balance_data['info_adicional']['gastos_sin_factura']:,.2f})", ""])
+    data.append(["   RESULTADOS ACUMULADOS REALES", "", f"{pat['resultados_acum']:,.2f}"])
+    data.append(["   TOTAL PATRIMONIO", "", f"{pat['total']:,.2f}"])
+    data.append(["", "", ""])
+    
+    # TOTAL PASIVO Y PATRIMONIO
+    total_pp = balance_data['validacion']['pasivo_patrimonio']
+    data.append(["TOTAL PASIVO Y PATRIMONIO", "", f"{total_pp:,.2f}"])
+
+    t = Table(data, colWidths=[3.5*inch, 1.5*inch, 1.5*inch])
+    t.setStyle(TableStyle([
+        ('FONTNAME', (0,0), (-1,-1), 'Helvetica'),
+        ('FONTNAME', (0,0), (0,0), 'Helvetica-Bold'),
+        ('FONTNAME', (0,13), (0,13), 'Helvetica-Bold'),
+        ('LINEABOVE', (2,13), (2,13), 1, colors.black),
+        ('FONTNAME', (0,14), (0,14), 'Helvetica-Bold'),
+        ('FONTNAME', (0,23), (0,23), 'Helvetica-Bold'),
+        ('FONTNAME', (0,-1), (-1,-1), 'Helvetica-Bold'),
+        ('LINEABOVE', (2,-1), (2,-1), 1, colors.black),
+        ('ALIGN', (1,0), (-1,-1), 'RIGHT'),
+        ('TEXTCOLOR', (0,26), (-1,26), colors.red),
+    ]))
+    
+    elements.append(t)
+    elements.append(Spacer(1, 0.3*inch))
+    
+    # Notas Explicativas
+    elements.append(Paragraph("<b>Notas Importantes:</b>", styles['Heading3']))
+    elements.append(Paragraph(f"1. <b>Caja Real</b>: Refleja el saldo bancario real después de TODOS los movimientos (con y sin factura).", styles['Normal']))
+    elements.append(Paragraph(f"2. <b>Utilidad Fiscal</b>: Bs {balance_data['info_adicional']['utilidad_fiscal_declarada']:,.2f} - Base para cálculo de IUE (25%). Se calcula solo con gastos facturados.", styles['Normal']))
+    elements.append(Paragraph(f"3. <b>Gastos No Deducibles</b>: Bs {balance_data['info_adicional']['gastos_sin_factura']:,.2f} - Gastos sin factura que redujeron la caja pero NO son deducibles para impuestos.", styles['Normal']))
+    elements.append(Paragraph("4. <b>Recomendación</b>: Exigir facturas en todas las compras futuras para maximizar deducciones fiscales.", styles['Normal']))
+    
+    _add_signatures(elements)
+    doc.build(elements)
+    buffer.seek(0)
+    return buffer

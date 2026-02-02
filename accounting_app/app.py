@@ -548,15 +548,29 @@ def show_reportes():
         
         pdf_balance = reports.generate_pdf_balance_sin(balance_data, f"Al {cutoff_date.strftime('%d/%m/%Y')}")
         
+        # Calcular TAMBIÉN el Balance Real (con todos los gastos)
+        balance_real_data = logic.calculate_balance_sheet_real(df, assets_df, cutoff_date)
+        pdf_balance_real = reports.generate_pdf_balance_real(balance_real_data, f"Al {cutoff_date.strftime('%d/%m/%Y')}")
+        
         c_bal1, c_bal2 = st.columns(2)
         with c_bal1:
             st.download_button(
-                label="🏛️ Descargar Balance General (Formato SIN)",
+                label="🏛️ Balance General (SIN - Solo Facturado)",
                 data=pdf_balance,
                 file_name=f"Balance_General_SIN_{cutoff_date.strftime('%Y%m%d')}.pdf",
                 mime="application/pdf",
-                help="Formato oficial: Activo = Pasivo + Patrimonio",
+                help="Formato oficial: Solo transacciones facturadas. Utilidad fiscal alta pero caja 'fantasma'.",
                 key="btn_balance_sin"
+            )
+        
+        with c_bal2:
+            st.download_button(
+                label="💰 Balance General (REAL - Gerencial)",
+                data=pdf_balance_real,
+                file_name=f"Balance_General_Real_{cutoff_date.strftime('%Y%m%d')}.pdf",
+                mime="application/pdf",
+                help="Refleja caja REAL incluyendo gastos no deducibles. Recomendado para gestión interna.",
+                key="btn_balance_real"
             )
             
         # --- REPORTE GERENCIAL COMPLETO ---
@@ -571,24 +585,41 @@ def show_reportes():
                 key="btn_informe_gerencial_completo"
             )
         
-        # --- VALIDACIÓN DE RECONCILIACIÓN ---
+        # --- VALIDACIÓN Y COMPARACIÓN ---
         st.markdown("#### ✅ Validación de Ecuación Contable")
         
-        val = balance_data['validacion']
-        col_v1, col_v2, col_v3 = st.columns(3)
+        col_comp1, col_comp2 = st.columns(2)
         
-        with col_v1:
+        with col_comp1:
+            st.markdown("**Balance SIN (Solo Facturado)**")
+            val = balance_data['validacion']
             st.metric("Total Activos", f"Bs {val['activos']:,.2f}")
-        with col_v2:
             st.metric("Pasivo + Patrimonio", f"Bs {val['pasivo_patrimonio']:,.2f}")
-        with col_v3:
             if val['cuadra']:
-                st.success(f"✅ Balance Cuadrado (Dif: {val['diferencia']:.2f})")
+                st.success(f"✅ Cuadra (Dif: {val['diferencia']:.2f})")
             else:
                 st.error(f"⚠️ Descuadre: Bs {val['diferencia']:,.2f}")
         
-        if not val['cuadra']:
-             st.warning("El balance presenta diferencias. Revise si hay gastos/ingresos 'huerfanos' o problemas de redondeo.")
+        with col_comp2:
+            st.markdown("**Balance Real (Gerencial)**")
+            val_real = balance_real_data['validacion']
+            st.metric("Total Activos", f"Bs {val_real['activos']:,.2f}")
+            st.metric("Pasivo + Patrimonio", f"Bs {val_real['pasivo_patrimonio']:,.2f}")
+            if val_real['cuadra']:
+                st.success(f"✅ Cuadra (Dif: {val_real['diferencia']:.2f})")
+            else:
+                st.error(f"⚠️ Descuadre: Bs {val_real['diferencia']:,.2f}")
+        
+        # Explicación de diferencias
+        st.info(f"""
+        **💡 Diferencia entre balances:**
+        - **Caja SIN**: Bs {balance_data['activos']['corriente']['caja']:,.2f} (ignora gastos sin factura)
+        - **Caja Real**: Bs {balance_real_data['activos']['corriente']['caja']:,.2f} (incluye todos los gastos)
+        - **Gastos No Deducibles**: Bs {balance_real_data['info_adicional']['gastos_sin_factura']:,.2f}
+        """)
+        
+        if not val['cuadra'] or not val_real['cuadra']:
+             st.warning("Revise si hay gastos/ingresos inconsistentes o problemas de redondeo.")
              
         # Debug View
         with st.expander("🔍 Ver Desglose Contable Detallado"):
