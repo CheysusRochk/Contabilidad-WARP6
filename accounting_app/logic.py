@@ -128,18 +128,44 @@ def classify_account(categoria):
         
     return 'Gastos Operativos Fijos'
 
+
 def calculate_period_depreciation(assets_df, months=12):
-    """Calcula depreciación estimada para un periodo (por defecto anual)."""
+    """
+    Calcula depreciación ACUMULADA desde la adquisición hasta ahora.
+    Usa método de línea recta mensual.
+    """
     total_dep = 0
     if assets_df.empty:
         return 0.0
-        
+    
+    from datetime import datetime
+    fecha_actual = datetime.now()
+    
     for _, row in assets_df.iterrows():
-        # Simplificación lineal anual: Valor / Vida Util
-        annual_dep = row['valor_inicial'] / row['vida_util_anios']
-        total_dep += annual_dep
-        
-    return total_dep if months == 12 else (total_dep / 12) * months
+        try:
+            # Calcular depreciación mensual
+            annual_dep = row['valor_inicial'] / row['vida_util_anios']
+            monthly_dep = annual_dep / 12
+            
+            # Calcular meses transcurridos desde adquisición
+            fecha_adq = datetime.strptime(str(row['fecha_adquisicion']), '%Y-%m-%d')
+            meses_uso = ((fecha_actual.year - fecha_adq.year) * 12 + 
+                        (fecha_actual.month - fecha_adq.month))
+            
+            # Limitar a vida útil máxima
+            meses_max = row['vida_util_anios'] * 12
+            meses_efectivos = min(meses_uso, meses_max)
+            
+            # Depreciación acumulada = Depreciación mensual * meses transcurridos
+            dep_acumulada = monthly_dep * meses_efectivos
+            total_dep += dep_acumulada
+            
+        except Exception as e:
+            # Si hay error en algún activo, usar depreciación anual simple
+            annual_dep = row['valor_inicial'] / row['vida_util_anios']
+            total_dep += annual_dep
+    
+    return total_dep
 
 def calculate_balance_sheet(df, assets_df, cutoff_date=None):
     """
@@ -162,14 +188,19 @@ def calculate_balance_sheet(df, assets_df, cutoff_date=None):
     is_aporte = df['categoria'].str.lower().str.contains('aporte', na=False) & \
                 df['categoria'].str.lower().str.contains('capital', na=False)
     
+    # Distinguir entre aportes en efectivo vs activos
+    is_aporte_activo = is_aporte & df['categoria'].str.lower().str.contains('activo', na=False)
+    is_aporte_efectivo = is_aporte & (~df['categoria'].str.lower().str.contains('activo', na=False))
+    
     # Ingresos: todos tienen factura (requisito para emitir)
     ingresos_facturados = df[(df['tipo'] == 'Ingreso') & (~is_aporte)]
     
     # Gastos: SOLO los que tienen factura (deducibles)
     gastos_facturados = df[(df['tipo'] == 'Gasto') & (df['tiene_factura'] == 1)]
     
-    # Capital Social
+    # Capital Social = Aportes en Efectivo + Aportes en Activos
     total_aportes = df[is_aporte]['monto'].sum()
+    aportes_efectivo = df[is_aporte_efectivo]['monto'].sum()
     
     # ========== 1. CÁLCULO DE CAJA (Solo transacciones fiscales) ==========
     # Ingresos brutos facturados
@@ -178,8 +209,9 @@ def calculate_balance_sheet(df, assets_df, cutoff_date=None):
     # Gastos brutos facturados
     gastos_brutos_fiscales = gastos_facturados['monto'].sum()
     
-    # Caja Fiscal = Aportes + Ingresos - Gastos (solo facturados)
-    caja_final = total_aportes + ingresos_brutos - gastos_brutos_fiscales
+    # Caja Fiscal = SOLO Aportes en Efectivo + Ingresos - Gastos (solo facturados)
+    # Los aportes de activos NO entran a caja
+    caja_final = aportes_efectivo + ingresos_brutos - gastos_brutos_fiscales
     
     # ========== 2. ACTIVOS FIJOS ==========
     valor_activos = assets_df['valor_inicial'].sum() if not assets_df.empty else 0
@@ -288,14 +320,20 @@ def calculate_balance_sheet_real(df, assets_df, cutoff_date=None):
     is_aporte = df['categoria'].str.lower().str.contains('aporte', na=False) & \
                 df['categoria'].str.lower().str.contains('capital', na=False)
     
+    # Distinguir entre aportes en efectivo vs activos
+    is_aporte_activo = is_aporte & df['categoria'].str.lower().str.contains('activo', na=False)
+    is_aporte_efectivo = is_aporte & (~df['categoria'].str.lower().str.contains('activo', na=False))
+    
     total_aportes = df[is_aporte]['monto'].sum()
+    aportes_efectivo = df[is_aporte_efectivo]['monto'].sum()
     
     # ========== 1. CAJA REAL (Todos los movimientos) ==========
     ingresos_total = df[(df['tipo'] == 'Ingreso') & (~is_aporte)]['monto'].sum()
     gastos_total = df[df['tipo'] == 'Gasto']['monto'].sum()
     
-    # Caja Real = Aportes + Ingresos - TODOS los Gastos
-    caja_real = total_aportes + ingresos_total - gastos_total
+    # Caja Real = SOLO Aportes en Efectivo + Ingresos - TODOS los Gastos
+    # Los aportes de activos NO entran a caja
+    caja_real = aportes_efectivo + ingresos_total - gastos_total
     
     # ========== 2. ACTIVOS FIJOS ==========
     valor_activos = assets_df['valor_inicial'].sum() if not assets_df.empty else 0
