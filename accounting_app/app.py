@@ -545,6 +545,54 @@ def show_reportes():
         legal_detailed_data['kpis']['iue'] = max(0, legal_detailed_data['kpis']['utilidad_antes_iue'] * 0.25)
         legal_detailed_data['kpis']['utilidad_neta'] = legal_detailed_data['kpis']['utilidad_antes_iue'] - legal_detailed_data['kpis']['iue']
         
+        # --- NUEVO: REPORTE DE CAJA REAL FINAL ---
+        st.markdown("---")
+        st.subheader("💰 Posición de Caja Neta Final (Liquidez Real)")
+        st.info("Este cálculo muestra tu dinero real disponible tras pagar todos los gastos (con/sin factura) y los impuestos de ley.")
+
+        # 1. Caja Operativa Bruta (Ingresos Reales - Gastos Reales Totales)
+        # Ingresos Reales: Ventas + Aportes (todo lo que entra al banco/bolsillo)
+        # Gastos Reales: TODO lo que sale (con y sin factura)
+        
+        # Ingresos Totales (Ventas + Aportes EFECTIVO)
+        # IMPORTANTE: Excluir aportes que son en especie (Activos)
+        ingresos_efectivo = df[(df['tipo'] == 'Ingreso') & 
+                               (~df['categoria'].str.lower().str.contains('activo', na=False))]['monto'].sum()
+        
+        total_inflow = ingresos_efectivo
+        
+        # Gastos Totales Reales (Incluyendo los "sin factura", EXCLUYENDO pagos de impuestos pasados para no duplicar)
+        # OJO: Aquí sí queremos RESTAR los pagos de impuestos reales (IVA/IT pagados) porque es salida de caja.
+        # Pero NO restamos la depreciación (no es salida de efectivo).
+        
+        # Calcular salidas de efectivo reales
+        total_outflow = 0
+        pagos_impuestos_realizados = 0
+        
+        for _, row in df[df['tipo'] == 'Gasto'].iterrows():
+             # Sumar todo gasto real
+             total_outflow += row['monto']
+             
+             # Rastrear cuánto pagamos de impuestos (para mostrarlo desglosado si se quiere)
+             if "impuesto" in row['categoria'].lower() or "it" in row['categoria'].lower():
+                 pagos_impuestos_realizados += row['monto']
+
+        caja_operativa_bruta = total_inflow - total_outflow
+        
+        # 2. Impuestos LEGALES Por Pagar (Futuros)
+        # IUE que se pagará al cierre de gestión (Calculado en el reporte legal)
+        iue_a_pagar = legal_detailed_data['kpis']['iue']
+        
+        # 3. Caja Líquida Final
+        caja_final_neta = caja_operativa_bruta - iue_a_pagar
+        
+        col_caja1, col_caja2, col_caja3 = st.columns(3)
+        col_caja1.metric("1. Caja Operativa (Hoy)", f"Bs {caja_operativa_bruta:,.2f}", help="Dinero físico actual (Ingresos - Gastos Totales)")
+        col_caja2.metric("2. (-) Reserva para IUE", f"Bs {iue_a_pagar:,.2f}", help="Impuesto a las Utilidades que deberás pagar el próximo año", delta_color="inverse")
+        col_caja3.metric("3. (=) CAJA LÍQUIDA REAL", f"Bs {caja_final_neta:,.2f}", delta="Tu ganancia real de bolsillo")
+        
+        st.markdown("---")
+        
         pdf_legal_det = reports.generate_pdf_legal_detailed(legal_detailed_data, "Acumulado Anual")
         st.download_button(
             label="⚖️ Estado de Resultados (LEGAL DETALLADO - Incluye Depreciación)",
@@ -675,14 +723,18 @@ def show_reportes():
         iva_neto = max(0, breakdown['iva_df'] - breakdown['iva_cf'])
         
         # IUE Estimado (25% sobre utilidades)
-        # Base imponible = Ingresos Netos - Gastos Deducibles (con factura) - IT
+        # Base imponible = Ingresos Netos - Gastos Deducibles (con factura) - IT - DEPRECIACION
         gastos_con_factura = df[(df['tipo'] == 'Gasto') & (df['tiene_factura'] == 1)]
         gastos_deducibles = 0
         for _, row in gastos_con_factura.iterrows():
             taxes = logic.calculate_taxes(row['monto'], row['tipo'], row['tiene_factura'], row['categoria'])
             gastos_deducibles += taxes['gasto_neto']
         
-        utilidad_imponible = breakdown['net_income'] - gastos_deducibles - it_total_pagado
+        # Calcular depreciacion anual acumulada
+        assets_df = db.get_assets()
+        depreciacion_fiscal = logic.calculate_period_depreciation(assets_df, 12)
+
+        utilidad_imponible = breakdown['net_income'] - gastos_deducibles - it_total_pagado - depreciacion_fiscal
         iue_estimado = max(0, utilidad_imponible * 0.25)  # 25% IUE
         
         t1, t2, t3, t4 = st.columns(4)

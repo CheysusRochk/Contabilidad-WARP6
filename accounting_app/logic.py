@@ -168,28 +168,39 @@ def get_monthly_tax_summary(df):
         # 2. IT (3% de Ventas Brutas)
         it_determinado = ventas_facturadas['monto'].sum() * IT_RATE
         
-        # 3. Detectar PAGOS realizados en este mes o que se refieren a este mes
-        # Nota: Los impuestos se suelen pagar al mes SIGUIENTE.
-        # Buscamos pagos en TODOS los datos cuyo detalle mencione este mes
-        pagos_mes = df[df['detalle'].str.contains(month_str, case=False, na=False) | 
-                       df['detalle'].str.contains(period.strftime('%B'), case=False, na=False)]
+        # 3. Detectar PAGOS INTELIGENTES (Smart Tax Match)
+        # Buscamos en TODOS los registros de impuestos si hay alguno que mencione este mes/año
         
         iva_pagado = 0
         it_pagado = 0
         
-        for _, row in month_df.iterrows():
+        # Nombre del mes en español para buscar (ej: "Octubre")
+        # Diccionario simple o locale
+        meses_es = { 1: "enero", 2: "febrero", 3: "marzo", 4: "abril", 5: "mayo", 6: "junio", 
+                     7: "julio", 8: "agosto", 9: "septiembre", 10: "octubre", 11: "noviembre", 12: "diciembre" }
+        nombre_mes = meses_es[period.month]
+        
+        # Filtrar solo transacciones de pago de impuestos GLOBALMENTE (no solo este mes)
+        # Buscamos "pago" + "impuesto/iva/it"
+        pagos_globales = df[df['categoria'].str.lower().str.contains('pago', na=False) & 
+                           (df['categoria'].str.lower().str.contains('impuesto', na=False) | 
+                            df['categoria'].str.lower().str.contains('iva', na=False) | 
+                            df['categoria'].str.lower().str.contains('it', na=False))]
+        
+        for _, row in pagos_globales.iterrows():
             det = str(row['detalle']).lower()
-            cat = str(row['categoria']).lower()
-            if "pago" in det or "pago" in cat:
-                if "iva" in det: iva_pagado += row['monto']
-                elif "it" in det: it_pagado += row['monto']
+            
+            # Chequear si el detalle menciona el mes actual del loop (ej: "octubre")
+            # Y OPCIONALMENTE el año (para evitar cruces si hay mucha historia, asumimos año actual del loop)
+            if nombre_mes in det:
+                # ¡Es un pago para ESTE mes fiscal!
+                if "iva" in det: 
+                    iva_pagado += row['monto']
+                elif "it" in det: 
+                    it_pagado += row['monto']
                 elif "impuesto" in det:
-                    # Si dice "impuestos" sin especificar, asumimos que puede ser el IT del 3% o repartido.
-                    # El usuario suele pagar juntos. Si no se puede distinguir, el calendario mostrará diferencia.
+                    # Genérico
                     pass 
-
-        # Si el usuario puso una sola línea de "pago impuestos", intentamos reconciliar por monto
-        # pero es mejor informar la diferencia.
         
         resumen[month_str] = {
             'iva_determinado': iva_determinado,
