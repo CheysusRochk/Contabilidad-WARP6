@@ -368,9 +368,9 @@ def generate_pdf_managerial_detailed(financial_data, period_name="Anual"):
     uai = financial_data['kpis'].get('utilidad_antes_iue', 0)
     data.append([f"(=) UTILIDAD ANTES DE IUE", "", "", f"{uai:,.2f}"])
     
-    # 5. IUE
+    # 5. IUE (Legal/Fiscal)
     iue = financial_data['kpis'].get('iue', 0)
-    data.append([f"(-) IUE ESTIMADO (25%)", "", "", f"{iue:,.2f}"])
+    data.append([f"(-) IUE POR PAGAR (Legal/Fiscal)", "", "", f"{iue:,.2f}"])
     
     # KPI: NETO
     un = financial_data['kpis'].get('utilidad_neta', 0)

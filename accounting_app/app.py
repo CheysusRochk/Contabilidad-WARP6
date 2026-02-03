@@ -375,6 +375,96 @@ def show_reportes():
             key="btn_er_legal_simple"
         )
         
+        # --- CÁLCULO DE DATA LEGAL (FISCAL) ESTRICTA ---
+        # SE CALCULA PRIMERO PARA OBTENER EL IUE LEGAL QUE SE USARÁ EN EL GERENCIAL
+        
+        # 1. Depreciación Común
+        assets_df = db.get_assets()
+        monthly_dep = logic.calculate_period_depreciation(assets_df, 12) # Anual
+        
+        # 2. Estructura Legal
+        legal_detailed_data = {
+            'ingresos': {'total': 0, 'items': []},
+            'costos_ventas': {'total': 0, 'items': []},
+            'gastos_personal': {'total': 0, 'items': []},
+            'gastos_fijos': {'total': 0, 'items': []},
+            'gastos_financieros': {'total': 0, 'items': []},
+            'impuestos': {'total': 0, 'items': []},
+            'depreciacion': {'total': monthly_dep, 'items': []},
+            'kpis': {}
+        }
+        
+        # Depreciación Items (Fiscal y Gerencial comparten esto)
+        dep_items = []
+        for _, asset in assets_df.iterrows():
+             annual_dep = asset['valor_inicial'] / asset['vida_util_anios']
+             item_dep = {
+                 'fecha': str(asset['fecha_adquisicion']), 
+                 'detalle': f"Depreciación: {asset['nombre']}", 
+                 'monto': annual_dep
+             }
+             dep_items.append(item_dep)
+             
+        legal_detailed_data['depreciacion']['items'] = dep_items
+
+        # Ingresos facturados
+        for _, row in df_legal_ingresos.iterrows():
+             if "aporte" not in row['categoria'].lower():
+                 legal_detailed_data['ingresos']['total'] += row['monto']
+                 legal_detailed_data['ingresos']['items'].append({
+                     'fecha': str(row['fecha']), 'detalle': f"{row['detalle']} ({row['categoria']})", 'monto': row['monto']
+                 })
+        
+        # Gastos SOLO facturados + clasificación
+        for _, row in df_legal_gastos.iterrows():
+            clas = logic.classify_account(row['categoria'])
+            item_dict = {'fecha': str(row['fecha']), 'detalle': f"{row['detalle']} ({row['categoria']})", 'monto': row['monto']}
+            
+            if clas == 'Excluir P&L (Pago Pasivo)':
+                continue
+            elif clas == 'Impuestos': 
+                 legal_detailed_data['impuestos']['total'] += row['monto']
+                 legal_detailed_data['impuestos']['items'].append(item_dict)
+            elif clas == 'Costo de Ventas': 
+                legal_detailed_data['costos_ventas']['total'] += row['monto']
+                legal_detailed_data['costos_ventas']['items'].append(item_dict)
+            elif clas == 'Gastos de Personal': 
+                legal_detailed_data['gastos_personal']['total'] += row['monto']
+                legal_detailed_data['gastos_personal']['items'].append(item_dict)
+            elif clas == 'Gastos Financieros': 
+                legal_detailed_data['gastos_financieros']['total'] += row['monto']
+                legal_detailed_data['gastos_financieros']['items'].append(item_dict)
+            else: 
+                legal_detailed_data['gastos_fijos']['total'] += row['monto']
+                legal_detailed_data['gastos_fijos']['items'].append(item_dict)
+        
+        # Agregar IT calculado Legal
+        it_legal = legal_detailed_data['ingresos']['total'] * 0.03
+        legal_detailed_data['impuestos']['total'] += it_legal
+        legal_detailed_data['impuestos']['items'].append({'fecha': '-', 'detalle': 'IT Generado por Ventas (3%)', 'monto': it_legal})
+        
+        # KPIs Legales
+        ingresos_brutos_legal = legal_detailed_data['ingresos']['total']
+        iva_df_legal = ingresos_brutos_legal * 0.13
+        ingresos_netos_legal = ingresos_brutos_legal - iva_df_legal
+        
+        costos_netos_legal = legal_detailed_data['costos_ventas']['total'] * 0.87
+        gastos_personal_netos = legal_detailed_data['gastos_personal']['total'] * 0.87
+        gastos_fijos_netos = legal_detailed_data['gastos_fijos']['total'] * 0.87
+        gastos_financieros_netos = legal_detailed_data['gastos_financieros']['total'] * 0.87
+        impuestos_directos_legal = legal_detailed_data['impuestos']['total']
+        
+        legal_detailed_data['kpis']['margen_bruto'] = ingresos_netos_legal - costos_netos_legal
+        legal_detailed_data['kpis']['bait'] = (legal_detailed_data['kpis']['margen_bruto'] - 
+                                                gastos_personal_netos - 
+                                                gastos_fijos_netos - 
+                                                monthly_dep)
+        legal_detailed_data['kpis']['utilidad_antes_iue'] = (legal_detailed_data['kpis']['bait'] - 
+                                                              gastos_financieros_netos - 
+                                                              impuestos_directos_legal)
+        legal_detailed_data['kpis']['iue'] = max(0, legal_detailed_data['kpis']['utilidad_antes_iue'] * 0.25)
+        legal_detailed_data['kpis']['utilidad_neta'] = legal_detailed_data['kpis']['utilidad_antes_iue'] - legal_detailed_data['kpis']['iue']
+
         # --- CÁLCULO GERENCIAL DETALLADO ---
         # Preparar estructura de datos granular
         mgr_data = {
@@ -432,18 +522,9 @@ def show_reportes():
         mgr_data['impuestos']['total'] += it_virtual
         mgr_data['impuestos']['items'].append({'fecha': '-', 'detalle': 'IT Generado por Ventas (3%)', 'monto': it_virtual})
 
-        # 3. Depreciación
-        assets_df = db.get_assets()
-        monthly_dep = logic.calculate_period_depreciation(assets_df, 12) # Anual
+        # 3. Depreciación (Reusar cálculo previo)
         mgr_data['depreciacion']['total'] = monthly_dep
-        # Detalle de depreciación por activo
-        for _, asset in assets_df.iterrows():
-             annual_dep = asset['valor_inicial'] / asset['vida_util_anios']
-             mgr_data['depreciacion']['items'].append({
-                 'fecha': str(asset['fecha_adquisicion']), 
-                 'detalle': f"Depreciación: {asset['nombre']}", 
-                 'monto': annual_dep
-             })
+        mgr_data['depreciacion']['items'] = dep_items # Reusar lista
              
         # 4. KPIs
         mgr_data['kpis']['margen_bruto'] = mgr_data['ingresos']['total'] - mgr_data['costos_ventas']['total']
@@ -461,7 +542,8 @@ def show_reportes():
             - mgr_data['impuestos']['total']
         )
         
-        mgr_data['kpis']['iue'] = max(0, mgr_data['kpis']['utilidad_antes_iue'] * 0.25)
+        # USAR IUE LEGAL (REAL) para reflejar la salida de caja verdadera
+        mgr_data['kpis']['iue'] = legal_detailed_data['kpis']['iue']
         mgr_data['kpis']['utilidad_neta'] = mgr_data['kpis']['utilidad_antes_iue'] - mgr_data['kpis']['iue']
         
         
@@ -479,79 +561,7 @@ def show_reportes():
         st.markdown("---")
         st.subheader("⚖️ Estado de Resultados Legal (SIN)")
         
-        # Usar misma estructura que mgr_data pero FILTRADO solo con factura
-        legal_detailed_data = {
-            'ingresos': {'total': 0, 'items': []},
-            'costos_ventas': {'total': 0, 'items': []},
-            'gastos_personal': {'total': 0, 'items': []},
-            'gastos_fijos': {'total': 0, 'items': []},
-            'gastos_financieros': {'total': 0, 'items': []},
-            'impuestos': {'total': 0, 'items': []},
-            'depreciacion': {'total': monthly_dep, 'items': mgr_data['depreciacion']['items']},  # Depreciación siempre aplica
-            'kpis': {}
-        }
-        
-        # Ingresos facturados (todos son operativos ya)
-        for _, row in df_legal_ingresos.iterrows():
-             if "aporte" not in row['categoria'].lower():
-                 legal_detailed_data['ingresos']['total'] += row['monto']
-                 legal_detailed_data['ingresos']['items'].append({
-                     'fecha': str(row['fecha']), 'detalle': f"{row['detalle']} ({row['categoria']})", 'monto': row['monto']
-                 })
-        
-        # Gastos SOLO facturados + clasificación
-        for _, row in df_legal_gastos.iterrows():
-            clas = logic.classify_account(row['categoria'])
-            item_dict = {'fecha': str(row['fecha']), 'detalle': f"{row['detalle']} ({row['categoria']})", 'monto': row['monto']}
-            
-            if clas == 'Excluir P&L (Pago Pasivo)':
-                continue
-            elif clas == 'Impuestos': 
-                 legal_detailed_data['impuestos']['total'] += row['monto']
-                 legal_detailed_data['impuestos']['items'].append(item_dict)
-            elif clas == 'Costo de Ventas': 
-                legal_detailed_data['costos_ventas']['total'] += row['monto']
-                legal_detailed_data['costos_ventas']['items'].append(item_dict)
-            elif clas == 'Gastos de Personal': 
-                legal_detailed_data['gastos_personal']['total'] += row['monto']
-                legal_detailed_data['gastos_personal']['items'].append(item_dict)
-            elif clas == 'Gastos Financieros': 
-                legal_detailed_data['gastos_financieros']['total'] += row['monto']
-                legal_detailed_data['gastos_financieros']['items'].append(item_dict)
-            else: 
-                legal_detailed_data['gastos_fijos']['total'] += row['monto']
-                legal_detailed_data['gastos_fijos']['items'].append(item_dict)
-        
-        # Agregar IT calculado
-        it_legal = legal_detailed_data['ingresos']['total'] * 0.03
-        legal_detailed_data['impuestos']['total'] += it_legal
-        legal_detailed_data['impuestos']['items'].append({'fecha': '-', 'detalle': 'IT Generado por Ventas (3%)', 'monto': it_legal})
-        
-        # KPIs para Legal - USAR MONTOS NETOS (87%) PARA CÁLCULOS FISCALES
-        # Ingresos Netos = Ingresos Brutos - IVA DF
-        ingresos_brutos_legal = legal_detailed_data['ingresos']['total']
-        iva_df_legal = ingresos_brutos_legal * 0.13
-        ingresos_netos_legal = ingresos_brutos_legal - iva_df_legal
-        
-        # Costos y Gastos Netos = Brutos * 0.87 (si tienen factura)
-        costos_netos_legal = legal_detailed_data['costos_ventas']['total'] * 0.87
-        gastos_personal_netos = legal_detailed_data['gastos_personal']['total'] * 0.87
-        gastos_fijos_netos = legal_detailed_data['gastos_fijos']['total'] * 0.87
-        gastos_financieros_netos = legal_detailed_data['gastos_financieros']['total'] * 0.87
-        
-        # Impuestos pagados (IT, patentes, etc.) - estos ya son netos, no tienen IVA
-        impuestos_directos_legal = legal_detailed_data['impuestos']['total']
-        
-        legal_detailed_data['kpis']['margen_bruto'] = ingresos_netos_legal - costos_netos_legal
-        legal_detailed_data['kpis']['bait'] = (legal_detailed_data['kpis']['margen_bruto'] - 
-                                                gastos_personal_netos - 
-                                                gastos_fijos_netos - 
-                                                legal_detailed_data['depreciacion']['total'])
-        legal_detailed_data['kpis']['utilidad_antes_iue'] = (legal_detailed_data['kpis']['bait'] - 
-                                                              gastos_financieros_netos - 
-                                                              impuestos_directos_legal)
-        legal_detailed_data['kpis']['iue'] = max(0, legal_detailed_data['kpis']['utilidad_antes_iue'] * 0.25)
-        legal_detailed_data['kpis']['utilidad_neta'] = legal_detailed_data['kpis']['utilidad_antes_iue'] - legal_detailed_data['kpis']['iue']
+        # (Calculado al inicio del bloque)
         
         # --- NUEVO: REPORTE DE CAJA REAL FINAL ---
         st.markdown("---")
