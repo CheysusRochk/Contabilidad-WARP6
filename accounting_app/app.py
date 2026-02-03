@@ -268,6 +268,11 @@ def show_reportes():
             breakdown['net_income'] += taxes.get('ingreso_neto', 0)
         
         for _, row in df[df['tipo'] == 'Gasto'].iterrows():
+            clas = logic.classify_account(row['categoria'])
+            # OMITIR pagos de impuestos del Estado de Resultados
+            if clas == 'Excluir P&L (Pago Pasivo)':
+                continue
+                
             taxes = logic.calculate_taxes(row['monto'], row['tipo'], row['tiene_factura'], row['categoria'])
             breakdown['iva_cf'] += taxes.get('iva_cf', 0)
             breakdown['gastos_netos'] += taxes.get('gasto_neto', 0)
@@ -337,6 +342,11 @@ def show_reportes():
             
         # Procesar Gastos (Solo Facturados)
         for _, row in df_legal_gastos.iterrows():
+            clas = logic.classify_account(row['categoria'])
+            # OMITIR pagos de impuestos del Estado de Resultados Legal
+            if clas == 'Excluir P&L (Pago Pasivo)':
+                continue
+                
             taxes = logic.calculate_taxes(row['monto'], row['tipo'], row['tiene_factura'], row['categoria'])
             leg_breakdown['iva_cf'] += taxes['iva_cf']
             leg_breakdown['gastos_netos'] += taxes['gasto_neto']
@@ -383,8 +393,10 @@ def show_reportes():
             item_dict = {'fecha': str(row['fecha']), 'detalle': f"{row['detalle']} ({row['categoria']})", 'monto': row['monto']}
             
             # Clasificacion
-            if clas == 'Impuestos': 
-                 # Los impuestos directos pagados explicitamente
+            if clas == 'Excluir P&L (Pago Pasivo)':
+                continue # No entra al Estado de Resultados
+            elif clas == 'Impuestos': 
+                 # Los impuestos directos pagados explicitamente (Tasas, Patentes, IT no virtual)
                  mgr_data['impuestos']['total'] += row['monto']
                  mgr_data['impuestos']['items'].append(item_dict)
             elif clas == 'Costo de Ventas': 
@@ -480,7 +492,9 @@ def show_reportes():
             clas = logic.classify_account(row['categoria'])
             item_dict = {'fecha': str(row['fecha']), 'detalle': f"{row['detalle']} ({row['categoria']})", 'monto': row['monto']}
             
-            if clas == 'Impuestos': 
+            if clas == 'Excluir P&L (Pago Pasivo)':
+                continue
+            elif clas == 'Impuestos': 
                  legal_detailed_data['impuestos']['total'] += row['monto']
                  legal_detailed_data['impuestos']['items'].append(item_dict)
             elif clas == 'Costo de Ventas': 
@@ -695,55 +709,23 @@ def show_reportes():
         st.subheader("📅 Calendario Fiscal Mensual")
         st.markdown("*Desglose mes a mes de impuestos generados y pagados*")
         
-        # Agregar columna de mes/año
-        df['fecha_dt'] = pd.to_datetime(df['fecha'])
-        df['mes_anio'] = df['fecha_dt'].dt.to_period('M')
+        # Usar la nueva lógica centralizada de resúmenes fiscales mensuales
+        tax_summary = logic.get_monthly_tax_summary(df)
         
-        # Agrupar por mes
-        meses = sorted(df['mes_anio'].unique())
-        
-        if len(meses) == 0:
+        if not tax_summary:
             st.info("No hay datos suficientes para mostrar el calendario mensual.")
         else:
             monthly_data = []
-            
-            for mes in meses:
-                df_mes = df[df['mes_anio'] == mes]
-                
-                # Ventas del mes (Filtrar Aportes)
-                is_aporte_mes = df_mes['categoria'].str.lower().str.contains('aporte', na=False) & \
-                                df_mes['categoria'].str.lower().str.contains('capital', na=False)
-                                
-                ventas_mes_df = df_mes[(df_mes['tipo'] == 'Ingreso') & (~is_aporte_mes)]
-                total_ventas = ventas_mes_df['monto'].sum()
-                
-                # Calcular IT e IVA generados
-                it_generado = total_ventas * 0.03
-                iva_df_generado = total_ventas * 0.13
-                
-                # Compras con factura del mes
-                compras_mes = df_mes[(df_mes['tipo'] == 'Gasto') & (df_mes['tiene_factura'] == 1)]
-                total_compras = compras_mes['monto'].sum()
-                iva_cf_generado = total_compras * 0.13
-                
-                # IVA neto a pagar
-                iva_neto_mes = max(0, iva_df_generado - iva_cf_generado)
-                
-                # Buscar pagos reales de impuestos en ese mes o posteriores
-                # (los impuestos se pagan el mes siguiente)
-                pagos_impuestos = df_mes[df_mes['categoria'].str.lower().str.contains('pago.*impuesto', na=False)]
-                total_pagado = pagos_impuestos['monto'].sum()
-                
+            for mes, vals in tax_summary.items():
                 monthly_data.append({
-                    'Mes': str(mes),
-                    'Ventas Operativas': total_ventas,
-                    'IT Generado (3%)': it_generado,
-                    'IVA DF (13%)': iva_df_generado,
-                    'IVA CF (13%)': iva_cf_generado,
-                    'IVA Neto a Pagar': iva_neto_mes,
-                    'Total Adeudado': it_generado + iva_neto_mes,
-                    'Pagos Registrados': total_pagado,
-                    'Diferencia': (it_generado + iva_neto_mes) - total_pagado
+                    'Mes': mes,
+                    'IVA Adeudado': vals['iva_determinado'],
+                    'IVA Pagado': vals['iva_pagado'],
+                    'IT Adeudado': vals['it_determinado'],
+                    'IT Pagado': vals['it_pagado'],
+                    'Total Adeudado': vals['total_determinado'],
+                    'Total Pagado': vals['total_pagado'],
+                    'Diferencia': vals['total_determinado'] - vals['total_pagado']
                 })
             
             df_monthly = pd.DataFrame(monthly_data)

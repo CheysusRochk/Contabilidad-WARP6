@@ -122,11 +122,85 @@ def classify_account(categoria):
     if any(x in cat for x in ['sueldo', 'salario', 'personal', 'afp', 'patronal', 'planila']):
         return 'Gastos de Personal'
 
-    # Impuestos (Gasto Directo)
+    # Impuestos (Gasto Directo - IT/Patentes/Tasas)
+    # IMPORTANTE: No incluir pagos de impuestos pasados (son pagos de pasivo)
     if any(x in cat for x in ['impuesto', 'it', 'tasa', 'patente']):
+        if "pago" in cat:
+            return 'Excluir P&L (Pago Pasivo)' # No es gasto del periodo
         return 'Impuestos'
         
     return 'Gastos Operativos Fijos'
+
+
+def get_monthly_tax_summary(df):
+    """
+    Genera un resumen mensual detallado de impuestos (IVA, IT)
+    considerando débitos, créditos y pagos realizados.
+    Sincronizado con lógica SIAT.
+    """
+    if df.empty:
+        return {}
+    
+    # Asegurar que la fecha sea datetime
+    if not pd.api.types.is_datetime64_any_dtype(df['fecha']):
+        df['fecha'] = pd.to_datetime(df['fecha'])
+    
+    # Agrupar por Mes-Año
+    df['periodo_mes'] = df['fecha'].dt.to_period('M')
+    periodos = sorted(df['periodo_mes'].unique())
+    
+    resumen = {}
+    
+    for period in periodos:
+        month_df = df[df['periodo_mes'] == period]
+        month_str = str(period)
+        
+        # 1. IVA (Ventas - Compras Facturadas)
+        ventas_facturadas = month_df[(month_df['tipo'] == 'Ingreso') & 
+                                     (~month_df['categoria'].str.lower().str.contains('aporte', na=False))]
+        compras_facturadas = month_df[(month_df['tipo'] == 'Gasto') & (month_df['tiene_factura'] == 1)]
+        
+        iva_df = ventas_facturadas['monto'].sum() * IVA_RATE
+        iva_cf = compras_facturadas['monto'].sum() * IVA_RATE
+        
+        iva_determinado = max(0, iva_df - iva_cf)
+        
+        # 2. IT (3% de Ventas Brutas)
+        it_determinado = ventas_facturadas['monto'].sum() * IT_RATE
+        
+        # 3. Detectar PAGOS realizados en este mes o que se refieren a este mes
+        # Nota: Los impuestos se suelen pagar al mes SIGUIENTE.
+        # Buscamos pagos en TODOS los datos cuyo detalle mencione este mes
+        pagos_mes = df[df['detalle'].str.contains(month_str, case=False, na=False) | 
+                       df['detalle'].str.contains(period.strftime('%B'), case=False, na=False)]
+        
+        iva_pagado = 0
+        it_pagado = 0
+        
+        for _, row in month_df.iterrows():
+            det = str(row['detalle']).lower()
+            cat = str(row['categoria']).lower()
+            if "pago" in det or "pago" in cat:
+                if "iva" in det: iva_pagado += row['monto']
+                elif "it" in det: it_pagado += row['monto']
+                elif "impuesto" in det:
+                    # Si dice "impuestos" sin especificar, asumimos que puede ser el IT del 3% o repartido.
+                    # El usuario suele pagar juntos. Si no se puede distinguir, el calendario mostrará diferencia.
+                    pass 
+
+        # Si el usuario puso una sola línea de "pago impuestos", intentamos reconciliar por monto
+        # pero es mejor informar la diferencia.
+        
+        resumen[month_str] = {
+            'iva_determinado': iva_determinado,
+            'it_determinado': it_determinado,
+            'iva_pagado': iva_pagado,
+            'it_pagado': it_pagado,
+            'total_determinado': iva_determinado + it_determinado,
+            'total_pagado': iva_pagado + it_pagado
+        }
+        
+    return resumen
 
 
 def calculate_period_depreciation(assets_df, months=12):
