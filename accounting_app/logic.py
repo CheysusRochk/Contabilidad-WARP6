@@ -318,10 +318,26 @@ def calculate_balance_sheet(df, assets_df, cutoff_date=None):
         taxes = calculate_taxes(row['monto'], row['tipo'], True, row['categoria'])
         iva_cf_total += taxes['iva_cf']
     
-    # Pasivos Tributarios
-    iva_por_pagar = max(0, iva_df_total - iva_cf_total)
+    # Pasivos Tributarios (Ajustado por Pagos)
+    pagos_impuestos = df[df['tipo'] == 'Gasto']
+    iva_pagado_acum = 0
+    it_pagado_acum = 0
+    
+    for _, row in pagos_impuestos.iterrows():
+        det = str(row['detalle']).lower()
+        cat = str(row['categoria']).lower()
+        monto = row['monto']
+        
+        # Considerar pago si la categoría o detalle lo indica explícitamente
+        if 'impuesto' in cat or 'tributo' in cat or 'pago' in det:
+            if 'iva' in det or '200' in det:
+                iva_pagado_acum += monto
+            elif 'it' in det or '400' in det:
+                it_pagado_acum += monto
+
+    iva_por_pagar = max(0, iva_df_total - iva_cf_total - iva_pagado_acum)
     iva_credito_fiscal = max(0, iva_cf_total - iva_df_total)
-    it_por_pagar = it_total
+    it_por_pagar = max(0, it_total - it_pagado_acum)
     
     # ========== 4. ESTADO DE RESULTADOS FISCAL (Para Patrimonio) ==========
     # Ingresos Netos = Ingresos Brutos - IVA DF
@@ -442,9 +458,25 @@ def calculate_balance_sheet_real(df, assets_df, cutoff_date=None):
         taxes = calculate_taxes(row['monto'], row['tipo'], True, row['categoria'])
         iva_cf_total += taxes['iva_cf']
     
-    iva_por_pagar = max(0, iva_df_total - iva_cf_total)
-    iva_credito_fiscal = max(0, iva_cf_total - iva_df_total)
-    it_por_pagar = it_total
+    # --- Deducción de Pagos Realizados (Lógica de Caja) ---
+    pagos_impuestos = df[df['tipo'] == 'Gasto']
+    iva_pagado_acum = 0
+    it_pagado_acum = 0
+    
+    for _, row in pagos_impuestos.iterrows():
+        det = str(row['detalle']).lower()
+        cat = str(row['categoria']).lower()
+        monto = row['monto']
+        
+        if 'impuesto' in cat or 'tributo' in cat or 'pago' in det:
+            if 'iva' in det or '200' in det:
+                iva_pagado_acum += monto
+            elif 'it' in det or '400' in det:
+                it_pagado_acum += monto
+
+    iva_por_pagar = max(0, iva_df_total - iva_cf_total - iva_pagado_acum)
+    iva_credito_fiscal = max(0, iva_cf_total - iva_df_total) # El crédito fiscal no se afecta por pagos, es saldo a favor
+    it_por_pagar = max(0, it_total - it_pagado_acum)
     
     # ========== 4. UTILIDAD FISCAL (Para IUE) ==========
     # Calcular igual que balance SIN (solo facturados)
@@ -461,7 +493,29 @@ def calculate_balance_sheet_real(df, assets_df, cutoff_date=None):
     
     # ========== 5. GASTOS NO DEDUCIBLES (Ajuste) ==========
     # Gastos sin factura que reducen la caja pero no la utilidad fiscal
-    gastos_sin_factura = df[(df['tipo'] == 'Gasto') & (df['tiene_factura'] == 0)]['monto'].sum()
+    # CORRECCIÓN: Restar de los gastos no deducibles SOLO la parte que efectivamente redujo el pasivo.
+    # Si se pagó de más, ese exceso sigue siendo una "pérdida" de caja ( gasto no deducible).
+    
+    gastos_sin_factura_df = df[(df['tipo'] == 'Gasto') & (df['tiene_factura'] == 0)]
+    gastos_sin_factura_total = gastos_sin_factura_df['monto'].sum()
+    
+    # Calcular cuánto redujimos los pasivos (La "parte eficaz" del pago)
+    # Lógica anterior:
+    # iva_por_pagar = max(0, david - credito - pagado)
+    # Reducción efectiva = deuda_neta_antes_pago - deuda_final
+    
+    iva_neto_gen = max(0, iva_df_total - iva_cf_total)
+    it_gen = it_total
+    
+    reduccion_iva = min(iva_neto_gen, iva_pagado_acum)
+    reduccion_it = min(it_gen, it_pagado_acum)
+    
+    total_reduccion_pasivo = reduccion_iva + reduccion_it
+    
+    # Ajustar gastos sin factura
+    # Restamos la reducción porque esa parte NO es gasto, es pago de deuda.
+    # El resto (exceso pago) se queda como gasto.
+    gastos_sin_factura_ajustado = gastos_sin_factura_total - total_reduccion_pasivo
     
     # ========== 6. ESTRUCTURA DEL BALANCE REAL ==========
     balance = {
@@ -490,12 +544,12 @@ def calculate_balance_sheet_real(df, assets_df, cutoff_date=None):
         'patrimonio': {
             'capital': total_aportes,
             'utilidad_fiscal': utilidad_neta_fiscal,  # Utilidad LEGAL (para impuestos)
-            'gastos_no_deducibles': -gastos_sin_factura,  # Ajuste negativo
-            'resultados_acum': utilidad_neta_fiscal - gastos_sin_factura,  # Resultado Real
-            'total': total_aportes + utilidad_neta_fiscal - gastos_sin_factura
+            'gastos_no_deducibles': -gastos_sin_factura_ajustado,  # Ajuste negativo
+            'resultados_acum': utilidad_neta_fiscal - gastos_sin_factura_ajustado,  # Resultado Real
+            'total': total_aportes + utilidad_neta_fiscal - gastos_sin_factura_ajustado
         },
         'info_adicional': {
-            'gastos_sin_factura': gastos_sin_factura,
+            'gastos_sin_factura': gastos_sin_factura_ajustado,
             'utilidad_fiscal_declarada': utilidad_neta_fiscal
         }
     }
