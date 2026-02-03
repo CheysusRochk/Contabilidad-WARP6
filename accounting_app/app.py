@@ -277,24 +277,28 @@ def show_reportes():
             breakdown['iva_cf'] += taxes.get('iva_cf', 0)
             breakdown['gastos_netos'] += taxes.get('gasto_neto', 0)
 
-        resultado_bruto = breakdown['net_income'] - breakdown['gastos_netos'] - breakdown['it_total'] # IT es gasto deducible
+        # Calcular Depreciación para el periodo (Anual por defecto)
+        assets_df = db.get_assets()
+        depreciacion_periodo = logic.calculate_period_depreciation(assets_df, 12)
+
+        resultado_operativo = breakdown['net_income'] - breakdown['gastos_netos'] - breakdown['it_total'] - depreciacion_periodo
 
         # Métricas Clave
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Ventas Netas", f"Bs {breakdown['net_income']:,.2f}", help="Ingresos Operativos menos IVA")
         c2.metric("Aportes Capital", f"Bs {total_aportes:,.2f}", help="Dinero inyectado (No paga impuestos)")
         c3.metric("IVA a Pagar (Aprox)", f"Bs {max(0, breakdown['iva_df'] - breakdown['iva_cf']):,.2f}")
-        c4.metric("Resultado Operativo", f"Bs {resultado_bruto:,.2f}", delta_color="normal")
+        c4.metric("Resultado Operativo", f"Bs {resultado_operativo:,.2f}", delta_color="normal", help="Incluye deducción por Depreciación")
 
         st.markdown("---")
         
         col_l, col_r = st.columns(2)
         
         with col_l:
-            st.subheader("Estado de Resultados (Proyectado)")
+            st.subheader("Estado de Resultados (Provisional)")
             st.write(pd.DataFrame({
-                "Concepto": ["Ingresos Operativos Netos (87%)", "(-) Gastos Netos Deducibles", "(-) Impuesto IT (3%)", "= RESULTADO OPERATIVO"],
-                "Monto (Bs)": [breakdown['net_income'], -breakdown['gastos_netos'], -breakdown['it_total'], resultado_bruto]
+                "Concepto": ["Ingresos Operativos Netos (87%)", "(-) Gastos Netos Deducibles", "(-) Impuesto IT (3%)", "(-) Depreciación Activos", "= RESULTADO ANTES DE IMPUESTOS (IUE)"],
+                "Monto (Bs)": [breakdown['net_income'], -breakdown['gastos_netos'], -breakdown['it_total'], -depreciacion_periodo, resultado_operativo]
             }))
 
         with col_r:
