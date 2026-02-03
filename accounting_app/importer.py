@@ -51,7 +51,12 @@ def process_import_file(uploaded_file):
                 metodo_pago = str(row.iloc[7]).strip()
                 tiene_factura_raw = str(row.iloc[8]).strip().lower()
                 
-                tiene_factura = True if "si" in tiene_factura_raw or "yes" in tiene_factura_raw else False
+                # Robust boolean parsing
+                tf_str = str(row.iloc[8]).strip().lower()
+                if any(x in tf_str for x in ['si', 'sí', 'yes', 'true', '1', 'con factura']):
+                    tiene_factura = True
+                else:
+                    tiene_factura = False
                 
                 if tipo not in ['Ingreso', 'Gasto']:
                     errors.append(f"Fila {index+2}: Tipo '{tipo}' inválido. Use 'Ingreso' o 'Gasto'.")

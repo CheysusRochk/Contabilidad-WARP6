@@ -232,7 +232,7 @@ def generate_excel_rcv(df_transactions):
         
     return output.getvalue()
 
-def generate_pdf_financials(ingresos_totales, gastos_totales, resultado, breakdown):
+def generate_pdf_financials(ingresos_totales, gastos_totales, resultado, breakdown, depreciation=0):
     """
     Genera Estado de Resultados en PDF.
     """
@@ -255,6 +255,7 @@ def generate_pdf_financials(ingresos_totales, gastos_totales, resultado, breakdo
         ["(+) Crédito Fiscal IVA (13%)", f"{breakdown['iva_cf']:.2f}"],
         ["(-) Impuesto a las Transacciones (3%)", f"{breakdown['it_total']:.2f}"],
         ["(=) Gastos Netos Deducibles", f"{breakdown['gastos_netos']:.2f}"],
+        ["(-) Depreciación Activos", f"{depreciation:.2f}"],
         ["", ""],
         ["RESULTADO ANTES DE IMPUESTOS (IUE)", f"{resultado:.2f}"]
     ]

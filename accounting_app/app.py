@@ -323,7 +323,9 @@ def show_reportes():
                     df['categoria'].str.lower().str.contains('capital', na=False)
         
         df_legal_ingresos = df[(df['tipo'] == 'Ingreso') & (~is_aporte)]  # Excluir aportes
-        df_legal_gastos = df[(df['tipo'] == 'Gasto') & (df['tiene_factura'] == 1)]
+        
+        # Robust filtering for boolean/int mixed types
+        df_legal_gastos = df[(df['tipo'] == 'Gasto') & (df['tiene_factura'].fillna(0).astype(int) == 1)]
         
         # Calcular totales para Legal
         leg_ingresos = df_legal_ingresos['monto'].sum()
@@ -355,9 +357,15 @@ def show_reportes():
             leg_breakdown['iva_cf'] += taxes['iva_cf']
             leg_breakdown['gastos_netos'] += taxes['gasto_neto']
             
-        leg_resultado = leg_breakdown['net_income'] - leg_breakdown['gastos_netos'] - leg_breakdown['it_total']
+        # Calcular Depreciación para reporte Legal Estricto
+        assets_df = db.get_assets()
+        monthly_dep = logic.calculate_period_depreciation(assets_df, 12)
+        
+        # Restar depreciación del resultado
+        leg_resultado = leg_breakdown['net_income'] - leg_breakdown['gastos_netos'] - leg_breakdown['it_total'] - monthly_dep
 
-        pdf_data = reports.generate_pdf_financials(leg_ingresos, leg_gastos, leg_resultado, leg_breakdown)
+        # Generar PDF pasando el resultado correcto y la depreciación explícita
+        pdf_data = reports.generate_pdf_financials(leg_ingresos, leg_gastos, leg_resultado, leg_breakdown, depreciation=monthly_dep)
         st.download_button(
             label="📄 Estado de Resultados (Legal - Solo Facturado)",
             data=pdf_data,
