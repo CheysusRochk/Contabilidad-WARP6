@@ -584,7 +584,13 @@ def calculate_balance_sheet_real(df, assets_df, cutoff_date=None):
     
     # ========== 3. IMPUESTOS (Solo sobre facturados) ==========
     ingresos_facturados = df[(df['tipo'] == 'Ingreso') & (~is_aporte)]
-    gastos_facturados = df[(df['tipo'] == 'Gasto') & (df['tiene_factura'] == 1)]
+    
+    # Filter CAPEX 
+    capex_categories = ['equipos de computación', 'muebles y enseres', 'maquinaria y equipo', 'vehículos', 'terrenos', 'edificios']
+    is_capex_mask = df['categoria'].astype(str).str.lower().isin(capex_categories)
+
+    # 1. Taxes (IVA/IT): Calculate on ALL invoiced expenses to get IVA Credit
+    gastos_facturados_all = df[(df['tipo'] == 'Gasto') & (df['tiene_factura'] == 1)]
     
     iva_df_total = 0
     iva_cf_total = 0
@@ -595,9 +601,41 @@ def calculate_balance_sheet_real(df, assets_df, cutoff_date=None):
         iva_df_total += taxes['iva_df']
         it_total += taxes['it']
     
-    for _, row in gastos_facturados.iterrows():
+    for _, row in gastos_facturados_all.iterrows():
         taxes = calculate_taxes(row['monto'], row['tipo'], True, row['categoria'])
         iva_cf_total += taxes['iva_cf']
+    
+    # ... (Payment deduction logic remains same) ...
+
+    # ========== 4. UTILIDAD FISCAL (Para IUE) ==========
+    # Income
+    ingresos_brutos_facturados = ingresos_facturados['monto'].sum()
+    ingresos_netos_fiscales = ingresos_brutos_facturados - iva_df_total
+
+    # Expenses: Exclude CAPEX from Deductible EXPENSES (Depreciation handles it)
+    gastos_facturados_no_capex = df[(df['tipo'] == 'Gasto') & (df['tiene_factura'] == 1) & (~is_capex_mask)]
+    gastos_brutos_facturados = gastos_facturados_no_capex['monto'].sum()
+    
+    gastos_netos_fiscales = gastos_brutos_facturados * 0.87
+    
+    # Retenciones are handled in Real Balance or not at all here?
+    # Logic.py usually calculates SIN balance purely on invoices.
+    # But wait, Retentions ARE deductible for SIN too.
+    # The original code here only looked at `gastos_facturados`.
+    # To be consistent with Real Balance, we should probably include Retentions here too?
+    # The previous code for SIN balance:
+    # gastos_facturados = df[(df['tipo'] == 'Gasto') & (df['tiene_factura'] == 1)]
+    # ...
+    # gastos_netos_fiscales = gastos_brutos_facturados * 0.87
+    # It ignored retentions.
+    # If the user wants Retentions to be liable, they should probably be here too.
+    # But let's stick to the current task: Fix CAPEX.
+    # If I change retentions here, I change scope.
+    # I will stick to fixing CAPEX for now.
+    
+    # Correct.
+
+    utilidad_antes_it = ingresos_netos_fiscales - gastos_netos_fiscales - dep_acumulada
     
     # --- Deducción de Pagos Realizados (Lógica de Caja) ---
     pagos_impuestos = df[df['tipo'] == 'Gasto']
@@ -630,29 +668,58 @@ def calculate_balance_sheet_real(df, assets_df, cutoff_date=None):
     retenciones_liability_total = 0
     
     # Filter: Invoice or Retention
-    if 'aplica_retencion' in df.columns:
-        gastos_deducibles = df[(df['tipo'] == 'Gasto') & 
-                            ((df['tiene_factura'] == 1) | (df['aplica_retencion'] == 1))]
-        # Truly Non-Deductible: No Invoice AND No Retention
-        gastos_no_deducibles_df = df[(df['tipo'] == 'Gasto') & 
-                                     (df['tiene_factura'] == 0) & 
-                                     (df['aplica_retencion'].fillna(0) == 0)]
-    else:
-        gastos_deducibles = df[(df['tipo'] == 'Gasto') & (df['tiene_factura'] == 1)]
-        gastos_no_deducibles_df = df[(df['tipo'] == 'Gasto') & (df['tiene_factura'] == 0)]
+    # Filter: Invoice or Retention
+    capex_categories = ['equipos de computación', 'muebles y enseres', 'maquinaria y equipo', 'vehículos', 'terrenos', 'edificios']
+    
+    # Helper to check if row is CAPEX
+    def is_capex(row):
+        return str(row['categoria']).lower() in capex_categories
 
-    for _, row in gastos_deducibles.iterrows():
+    is_capex_mask = df['categoria'].astype(str).str.lower().isin(capex_categories)
+    
+    # 1. For Taxes (IVA Credit): Include ALL expenses (CAPEX included)
+    expenses_df_all = df[df['tipo'] == 'Gasto']
+    
+    # 2. For P&L (Deductible Expenses): Exclude CAPEX (Depreciation is handled separately)
+    expenses_df_no_capex = df[(df['tipo'] == 'Gasto') & (~is_capex_mask)]
+
+    # Calculate Tax Liabilities and Credits using ALL expenses
+    # But for accumulated DEDUCTIBLE AMOUNT, strictly filter
+    
+    # We iterate over ALL potential tax generating expenses
+    if 'aplica_retencion' in df.columns:
+        # Candidates for taxes: Invoice OR Retention
+        tax_candidates = expenses_df_all[((expenses_df_all['tiene_factura'] == 1) | (expenses_df_all['aplica_retencion'] == 1))]
+    else:
+        tax_candidates = expenses_df_all[expenses_df_all['tiene_factura'] == 1]
+
+    for _, row in tax_candidates.iterrows():
         ar = row.get('aplica_retencion', 0) == 1
         taxes = calculate_taxes(row['monto'], row['tipo'], row['tiene_factura'] == 1, row['categoria'], aplica_retencion=ar)
         
-        if 'gasto_neto' in taxes:
-             gastos_netos_fiscales += taxes['gasto_neto'] # Gross if retention, Net if invoice
-        else:
-             if row['tiene_factura'] == 1:
-                 gastos_netos_fiscales += row['monto'] * 0.87
+        # Determine if this row is CAPEX
+        row_is_capex = is_capex(row)
         
+        # Accumulate Net Expense ONLY if NOT CAPEX
+        if not row_is_capex:
+            if 'gasto_neto' in taxes:
+                 gastos_netos_fiscales += taxes['gasto_neto'] # Gross if retention, Net if invoice
+            else:
+                 if row['tiene_factura'] == 1:
+                     gastos_netos_fiscales += row['monto'] * 0.87
+        
+        # Accumulate Retention Liability (Always, even if CAPEX - though usually Services)
         if 'retenciones' in taxes:
              retenciones_liability_total += taxes['retenciones']['total']
+             
+    # Recalculate Non-Deductible for equation: Expenses that are NOT CAPEX and have NO Invoice/Retention
+    # (CAPEX without invoice is just Asset without credit, still not P&L expense)
+    if 'aplica_retencion' in df.columns:
+         gastos_no_deducibles_df = expenses_df_no_capex[
+                                     (expenses_df_no_capex['tiene_factura'] == 0) & 
+                                     (expenses_df_no_capex['aplica_retencion'].fillna(0) == 0)]
+    else:
+         gastos_no_deducibles_df = expenses_df_no_capex[expenses_df_no_capex['tiene_factura'] == 0]
     
     # Retenciones Pagadas
     retenciones_pagado_acum = 0
@@ -708,14 +775,27 @@ def calculate_balance_sheet_real(df, assets_df, cutoff_date=None):
     # Pasivos Reales:
     total_pasivos_reales = iva_por_pagar + it_por_pagar + iue_por_pagar + retenciones_por_pagar
     
-    # Patrimonio Real
-    patrimonio_real = total_activos_reales - total_pasivos_reales
-    resultados_acum_real = patrimonio_real - total_aportes
+    # ========== 6. PATRIMONIO REAL (Bottom-Up Calculation) ==========
+    # Start with Fiscal Utility, then subtract non-deductible expenses
+    # Non-deductible = Gastos without Invoice AND without Retention
+    gastos_sin_factura_total = gastos_no_deducibles_df['monto'].sum()
     
-    # Back-calculate the "Gastos No Deducibles & Otros" for display
-    # Resultados Acum Real = Utilidad Fiscal - GastosNoDeducibles
-    # => GastosNoDeducibles = Utilidad Fiscal - Resultados Acum Real
-    gastos_no_deducibles_implied = utilidad_neta_fiscal - resultados_acum_real
+    # Calculate net non-deductible after accounting for tax payments  
+    # (Tax payments reduce liabilities, not equity)
+    iva_neto_gen = max(0, iva_df_total - iva_cf_total)
+    reduccion_iva = min(iva_neto_gen, iva_pagado_acum)
+    reduccion_it = min(it_total, it_pagado_acum)
+    total_reduccion_pasivo = reduccion_iva + reduccion_it
+    
+    # Adjust: Subtract tax payments from non-deductibles 
+    # (because they reduce liability, not equity)
+    gastos_sin_factura_ajustado = max(0, gastos_sin_factura_total - total_reduccion_pasivo)
+    
+    # Real Results = Fiscal Utility - Non-Deductible Expenses
+    resultados_acum_real = utilidad_neta_fiscal - gastos_sin_factura_ajustado
+    
+    # Real Patrimonio = Capital + Real Results
+    patrimonio_real = total_aportes + resultados_acum_real
     
     balance = {
         'activos': {
@@ -748,14 +828,17 @@ def calculate_balance_sheet_real(df, assets_df, cutoff_date=None):
             'total': patrimonio_real
         },
         'info_adicional': {
-            'gastos_sin_factura': gastos_no_deducibles_implied 
-        },
-         'validacion': {
-            'activos': total_activos_reales,
-            'pasivo_patrimonio': total_pasivos_reales + patrimonio_real,
-            'diferencia': total_activos_reales - (total_pasivos_reales + patrimonio_real),
-            'cuadra': True # By definition
+            'gastos_sin_factura': gastos_sin_factura_ajustado
         }
+    }
+    
+    # ========== 7. VALIDACIÓN DE ECUACIÓN CONTABLE ==========
+    diferencia = total_activos_reales - (total_pasivos_reales + patrimonio_real)
+    balance['validacion'] = {
+        'activos': total_activos_reales,
+        'pasivo_patrimonio': total_pasivos_reales + patrimonio_real,
+        'diferencia': diferencia,
+        'cuadra': abs(diferencia) < 1.0
     }
     
     return balance

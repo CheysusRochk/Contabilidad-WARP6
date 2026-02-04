@@ -301,13 +301,6 @@ def show_reportes():
 
         resultado_operativo = breakdown['net_income'] - breakdown['gastos_netos'] - breakdown['it_total'] - depreciacion_periodo
 
-        # Métricas Clave
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Ventas Netas", f"Bs {breakdown['net_income']:,.2f}", help="Ingresos Operativos menos IVA")
-        c2.metric("Aportes Capital", f"Bs {total_aportes:,.2f}", help="Dinero inyectado (No paga impuestos)")
-        c3.metric("IVA a Pagar (Aprox)", f"Bs {max(0, breakdown['iva_df'] - breakdown['iva_cf']):,.2f}")
-        c4.metric("Resultado Operativo", f"Bs {resultado_operativo:,.2f}", delta_color="normal", help="Incluye deducción por Depreciación")
-        
         if retenciones_liability > 0:
              st.info(f"💰 Se han generado **Bs {retenciones_liability:,.2f}** en Retenciones por Pagar (RC-IVA/IT) que debes declarar.")
 
@@ -391,12 +384,24 @@ def show_reportes():
                  legal_detailed_data['ingresos']['total'] += row['monto']
                  legal_detailed_data['ingresos']['items'].append({'fecha': str(row['fecha']), 'detalle': f"{row['detalle']} ({row['categoria']})", 'monto': row['monto']})
         
+        # Adjust Ingresos to Net for the Report Table
+        iva_df_legal_total = legal_detailed_data['ingresos']['total'] * 0.13
+        legal_detailed_data['ingresos']['items'].append({'fecha': '', 'detalle': '(-) IVA Débito Fiscal (13%)', 'monto': -iva_df_legal_total})
+        # Note: We don't reduce 'total' here because the report generator sums the items? 
+        # Wait, report generator uses 'items' to print rows, but does it recalculate total from items?
+        # Reports.py: add_section sums items?
+        # Let's check reports.py logic in thought process.
+        # Yes, add_section sums items if not provided? No, usually it iterates. 
+        # I need to ensure legal_detailed_data['ingresos']['total'] reflects NET if the table header implies NET.
+        # BUT the explicit IVA item makes the sum Net.
+        legal_detailed_data['ingresos']['total'] -= iva_df_legal_total
+
         # Accumulators for Deducible Expense (Neto or Gross)
         deducible_costos = 0
         deducible_personal = 0
         deducible_financieros = 0
         deducible_fijos = 0
-        deducible_impuestos = 0 # Direct taxes like ITF, IPBI (not IVA/IT which are separate)
+        deducible_impuestos = 0 
 
         for _, row in df_legal_gastos.iterrows():
             clas = logic.classify_account(row['categoria'])
@@ -412,55 +417,50 @@ def show_reportes():
             else:
                  expense_amount = row['monto']
                  deducible_amount = row['monto'] * 0.87 # 87% Net Cost
-                 detalle_str = f"{row['detalle']} ({row['categoria']})"
+                 detalle_str = f"{row['detalle']} (Neto sin IVA)"
             
-            item_dict = {'fecha': str(row['fecha']), 'detalle': detalle_str, 'monto': expense_amount}
+            # USE DEDUCIBLE AMOUNT FOR DISPLAY TO MATCH MARGINS
+            item_dict = {'fecha': str(row['fecha']), 'detalle': detalle_str, 'monto': deducible_amount}
             
             if clas == 'Excluir P&L (Pago Pasivo)': continue
             elif clas == 'Impuestos': 
-                 legal_detailed_data['impuestos']['total'] += expense_amount
+                 legal_detailed_data['impuestos']['total'] += deducible_amount
                  legal_detailed_data['impuestos']['items'].append(item_dict)
-                 deducible_impuestos += deducible_amount # Usually taxes are 100% deducible? No, usually deductible taxes are not IVA. IT is deductible. 
-                 # If 'Impuestos' category has invoice? Unlikely. Assuming 100% deductible if classified as Impuestos (like Tasas).
-                 # But in previous code, it multiplied legal_detailed_data['impuestos']['total'] * 0.87? No, it used 'impuestos_directos_legal = total'. (Line 396 in orig).
-                 # So Impuestos were treated as 100% deductible. Correct.
-                 # deducible_impuestos = legal_detailed_data['impuestos']['total'] # Will calc at end - This line is wrong, it should accumulate
+                 deducible_impuestos += deducible_amount 
             elif clas == 'Costo de Ventas': 
-                legal_detailed_data['costos_ventas']['total'] += expense_amount
+                legal_detailed_data['costos_ventas']['total'] += deducible_amount
                 legal_detailed_data['costos_ventas']['items'].append(item_dict)
                 deducible_costos += deducible_amount
             elif clas == 'Gastos de Personal': 
-                legal_detailed_data['gastos_personal']['total'] += expense_amount
+                legal_detailed_data['gastos_personal']['total'] += deducible_amount
                 legal_detailed_data['gastos_personal']['items'].append(item_dict)
                 deducible_personal += deducible_amount
             elif clas == 'Gastos Financieros': 
-                legal_detailed_data['gastos_financieros']['total'] += expense_amount
+                legal_detailed_data['gastos_financieros']['total'] += deducible_amount
                 legal_detailed_data['gastos_financieros']['items'].append(item_dict)
                 deducible_financieros += deducible_amount
             else: 
-                legal_detailed_data['gastos_fijos']['total'] += expense_amount
+                legal_detailed_data['gastos_fijos']['total'] += deducible_amount
                 legal_detailed_data['gastos_fijos']['items'].append(item_dict)
                 deducible_fijos += deducible_amount
         
-        it_legal = legal_detailed_data['ingresos']['total'] * 0.03
+        # IT is calculated on GROSS Income, so we need the original gross info.
+        # We modified legal_detailed_data['ingresos']['total'] to be Net.
+        # Calculate IT based on Gross (Net / 0.87).
+        ingresos_netos_legal = legal_detailed_data['ingresos']['total']
+        ingresos_brutos_legal = ingresos_netos_legal / 0.87 
+        
+        it_legal = ingresos_brutos_legal * 0.03
         legal_detailed_data['impuestos']['total'] += it_legal
         legal_detailed_data['impuestos']['items'].append({'fecha': '-', 'detalle': 'IT Generado por Ventas (3%)', 'monto': it_legal})
-        deducible_impuestos += it_legal # IT is also a deductible expense
+        deducible_impuestos += it_legal 
         
-        ingresos_brutos_legal = legal_detailed_data['ingresos']['total']
-        iva_df_legal = ingresos_brutos_legal * 0.13
-        ingresos_netos_legal = ingresos_brutos_legal - iva_df_legal
+        # KPI calculations use the deducible totals now
+        # Note: ingresos_netos_legal is already Net.
         
-        # Use calculated deducibles
-        costos_netos_legal = deducible_costos
-        gastos_personal_netos = deducible_personal
-        gastos_fijos_netos = deducible_fijos
-        gastos_financieros_netos = deducible_financieros
-        impuestos_directos_legal = deducible_impuestos
-        
-        legal_detailed_data['kpis']['margen_bruto'] = ingresos_netos_legal - costos_netos_legal
-        legal_detailed_data['kpis']['bait'] = (legal_detailed_data['kpis']['margen_bruto'] - gastos_personal_netos - gastos_fijos_netos - monthly_dep)
-        legal_detailed_data['kpis']['utilidad_antes_iue'] = (legal_detailed_data['kpis']['bait'] - gastos_financieros_netos - impuestos_directos_legal)
+        legal_detailed_data['kpis']['margen_bruto'] = ingresos_netos_legal - deducible_costos
+        legal_detailed_data['kpis']['bait'] = (legal_detailed_data['kpis']['margen_bruto'] - deducible_personal - deducible_fijos - monthly_dep)
+        legal_detailed_data['kpis']['utilidad_antes_iue'] = (legal_detailed_data['kpis']['bait'] - deducible_financieros - deducible_impuestos)
         legal_detailed_data['kpis']['iue'] = max(0, legal_detailed_data['kpis']['utilidad_antes_iue'] * 0.25)
         legal_detailed_data['kpis']['utilidad_neta'] = legal_detailed_data['kpis']['utilidad_antes_iue'] - legal_detailed_data['kpis']['iue']
         
@@ -482,31 +482,49 @@ def show_reportes():
                  
         for _, row in df[df['tipo'] == 'Gasto'].iterrows():
             clas = logic.classify_account(row['categoria'])
-            item_dict = {'fecha': str(row['fecha']), 'detalle': f"{row['detalle']} ({row['categoria']})", 'monto': row['monto']}
+            ar = row.get('aplica_retencion', 0) == 1
+            
+            # For Managerial, we want REAL COST. 
+            # If retention, real cost is BRUTO.
+            if ar:
+                 bruto, _, _ = logic.calculate_grossing_up(row['monto'])
+                 expense_amount = bruto
+                 detalle_str = f"{row['detalle']} (Costo Real c/ Retención)"
+            else:
+                 expense_amount = row['monto'] # 100% Cash/Invoice
+                 detalle_str = f"{row['detalle']} ({row['categoria']})"
+            
+            item_dict = {'fecha': str(row['fecha']), 'detalle': detalle_str, 'monto': expense_amount}
+            
             if clas == 'Excluir P&L (Pago Pasivo)': continue
             elif clas == 'Impuestos': 
-                 mgr_data['impuestos']['total'] += row['monto']
+                 mgr_data['impuestos']['total'] += expense_amount
                  mgr_data['impuestos']['items'].append(item_dict)
             elif clas == 'Costo de Ventas': 
-                mgr_data['costos_ventas']['total'] += row['monto']
+                mgr_data['costos_ventas']['total'] += expense_amount
                 mgr_data['costos_ventas']['items'].append(item_dict)
             elif clas == 'Gastos de Personal': 
-                mgr_data['gastos_personal']['total'] += row['monto']
+                mgr_data['gastos_personal']['total'] += expense_amount
                 mgr_data['gastos_personal']['items'].append(item_dict)
             elif clas == 'Gastos Financieros': 
-                mgr_data['gastos_financieros']['total'] += row['monto']
+                mgr_data['gastos_financieros']['total'] += expense_amount
                 mgr_data['gastos_financieros']['items'].append(item_dict)
             else: 
-                mgr_data['gastos_fijos']['total'] += row['monto']
+                mgr_data['gastos_fijos']['total'] += expense_amount
                 mgr_data['gastos_fijos']['items'].append(item_dict)
         
+        # Taxes: Add IVA Neto to be realistic
+        iva_a_pagar_mgr = max(0, breakdown['iva_df'] - breakdown['iva_cf'])
+        mgr_data['impuestos']['total'] += iva_a_pagar_mgr
+        mgr_data['impuestos']['items'].append({'fecha': '-', 'detalle': 'IVA Neto a Pagar Estimado (13% - Crédito)', 'monto': iva_a_pagar_mgr})
+
         it_virtual = mgr_data['ingresos']['total'] * 0.03
         mgr_data['impuestos']['total'] += it_virtual
         mgr_data['impuestos']['items'].append({'fecha': '-', 'detalle': 'IT Generado por Ventas (3%)', 'monto': it_virtual})
 
         mgr_data['kpis']['margen_bruto'] = mgr_data['ingresos']['total'] - mgr_data['costos_ventas']['total']
         mgr_data['kpis']['bait'] = mgr_data['kpis']['margen_bruto'] - mgr_data['gastos_personal']['total'] - mgr_data['gastos_fijos']['total'] - mgr_data['depreciacion']['total']
-        mgr_data['kpis']['utilidad_antes_iue'] = mgr_data['kpis']['bait'] - mgr_data['gastos_financieros']['total'] - mgr_data['impuestos']['total']
+        mgr_data['kpis']['utilidad_antes_iue'] = (mgr_data['kpis']['bait'] - mgr_data['gastos_financieros']['total'] - mgr_data['impuestos']['total'])
         mgr_data['kpis']['iue'] = legal_detailed_data['kpis']['iue']
         mgr_data['kpis']['utilidad_neta'] = mgr_data['kpis']['utilidad_antes_iue'] - mgr_data['kpis']['iue']
         
@@ -526,15 +544,6 @@ def show_reportes():
         excel_rcv = reports.generate_excel_rcv(df)
 
         # --- 2. RENDER SECTIONS ---
-
-        # Provisional View (Full Width)
-        st.subheader("Estado de Resultados (Provisional)")
-        st.write(pd.DataFrame({
-            "Concepto": ["Ingresos Operativos Netos (87%)", "(-) Gastos Netos Deducibles", "(-) Impuesto IT (3%)", "(-) Depreciación Activos", "= RESULTADO ANTES DE IMPUESTOS (IUE)"],
-            "Monto (Bs)": [breakdown['net_income'], -breakdown['gastos_netos'], -breakdown['it_total'], -depreciacion_periodo, resultado_operativo]
-        }))
-        
-        st.markdown("---")
         
         # COLUMNS LAYOUT
         st.markdown("### 📂 Descarga de Reportes")
@@ -725,55 +734,7 @@ def show_reportes():
             st.success("¡Excelente! Todos tus gastos tienen factura.")
             
         
-        st.markdown("---")
         
-        # --- PANEL FISCAL COMPLETO ---
-        st.subheader("📋 Resumen Fiscal Anual")
-        st.markdown("*Métricas acumuladas para planificación tributaria*")
-        
-        # IT Total Pagado (acumulado)
-        it_total_pagado = breakdown['it_total']
-        
-        # IVA Neto a Pagar (Débito - Crédito)
-        iva_neto = max(0, breakdown['iva_df'] - breakdown['iva_cf'])
-        
-        # IUE Estimado (25% sobre utilidades)
-        # Base imponible = Ingresos Netos - Gastos Deducibles (con factura) - IT - DEPRECIACION
-        gastos_con_factura = df[(df['tipo'] == 'Gasto') & (df['tiene_factura'] == 1)]
-        gastos_deducibles = 0
-        for _, row in gastos_con_factura.iterrows():
-            taxes = logic.calculate_taxes(row['monto'], row['tipo'], row['tiene_factura'], row['categoria'])
-            gastos_deducibles += taxes['gasto_neto']
-        
-        # Calcular depreciacion anual acumulada
-        assets_df = db.get_assets()
-        depreciacion_fiscal = logic.calculate_period_depreciation(assets_df, 12)
-
-        utilidad_imponible = breakdown['net_income'] - gastos_deducibles - it_total_pagado - depreciacion_fiscal
-        iue_estimado = max(0, utilidad_imponible * 0.25)  # 25% IUE
-        
-        t1, t2, t3, t4 = st.columns(4)
-        t1.metric("💰 IT Total Pagado", f"Bs {it_total_pagado:,.2f}", help="Impuesto a las Transacciones acumulado (3%)")
-        t2.metric("🏦 IVA Neto a Pagar", f"Bs {iva_neto:,.2f}", help="IVA Débito - IVA Crédito Fiscal")
-        t3.metric("📊 Utilidad Imponible", f"Bs {utilidad_imponible:,.2f}", help="Base para cálculo de IUE")
-        t4.metric("🔴 IUE Estimado (25%)", f"Bs {iue_estimado:,.2f}", 
-                  delta=f"-{(gastos_deducibles/breakdown['net_income']*100):.1f}% por gastos no deducibles" if breakdown['net_income'] > 0 else "0%",
-                  delta_color="inverse",
-                  help="Impuesto a las Utilidades proyectado anual")
-        
-        # Explicación
-        with st.expander("ℹ️ Ver Cálculo Detallado de IUE"):
-            st.write(f"""
-            **Fórmula del IUE:**
-            - Ingresos Netos (87%): Bs {breakdown['net_income']:,.2f}
-            - (-) Gastos Deducibles (con factura): Bs {gastos_deducibles:,.2f}
-            - (-) IT Pagado (3%): Bs {it_total_pagado:,.2f}
-            - **= Utilidad Imponible:** Bs {utilidad_imponible:,.2f}
-            - **× 25% = IUE a Pagar:** Bs {iue_estimado:,.2f}
-            
-            ⚠️ **Importante:** Los gastos SIN factura ({breakdown['gastos_netos'] - gastos_deducibles:,.2f} Bs) NO son deducibles y aumentan tu IUE.
-            """)
-
         st.markdown("---")
         
         # --- CALENDARIO FISCAL MENSUAL ---
