@@ -144,9 +144,14 @@ def show_registro():
             metodo_pago = st.selectbox("Método de Pago", ["Efectivo", "Transferencia", "QR", "Cheque"])
             
             tiene_factura = False
+            aplica_retencion = False
+            
             if tipo == "Gasto":
                 tiene_factura = st.checkbox("¿Tiene Factura (Crédito Fiscal)?")
-            
+                if not tiene_factura:
+                    aplica_retencion = st.checkbox("¿Aplicar Retención (Grossing Up)?", 
+                               help="Marca esto si asumes el impuesto del proveedor (13% RC-IVA + 3% IT). El monto ingresado será el líquido pagado.")
+
             submitted = st.form_submit_button("Guardar Transacción")
             
             if submitted:
@@ -160,13 +165,17 @@ def show_registro():
                         st.warning(f"⚠️ ALERTA DE BANCARIZACIÓN: El monto {monto} Bs supera los 50.000 Bs. Se requiere documento de pago bancario obligatorio.")
                         # En un caso real, aquí pediríamos subir el archivo PDF del comprobante
                     
-                    db.add_transaction(fecha, tipo, categoria, detalle, n_factura, nit, monto, metodo_pago, tiene_factura)
+                    db.add_transaction(fecha, tipo, categoria, detalle, n_factura, nit, monto, metodo_pago, tiene_factura, aplica_retencion)
                     st.success("Transacción registrada correctamente")
                     
                     # Mostrar desglose flash
-                    tax_info = logic.calculate_taxes(monto, tipo, tiene_factura, categoria)
-                    if tax_info.get('iva_df', 0) == 0 and tax_info.get('it', 0) == 0:
+                    tax_info = logic.calculate_taxes(monto, tipo, tiene_factura, categoria, aplica_retencion)
+                    if tax_info.get('iva_df', 0) == 0 and tax_info.get('it', 0) == 0 and not tax_info.get('retenciones'):
                          st.info(f"Registro Exento de Impuestos (Monto Total: {monto})")
+                    elif aplica_retencion:
+                         ret = tax_info['retenciones']
+                         bruto = tax_info['monto_bruto']
+                         st.info(f"💰 Retención Aplicada (Grossing Up): Gasto Deducible: {bruto:.2f} | A Pagar: {ret['total']:.2f} (RC-IVA: {ret['rc_iva']:.2f} + IT: {ret['it']:.2f})")
                     elif tipo == 'Ingreso':
                         st.info(f"Desglose Automático: IVA DF: {tax_info['iva_df']:.2f} | IT: {tax_info['it']:.2f} | Neto: {tax_info['ingreso_neto']:.2f}")
 
@@ -267,15 +276,24 @@ def show_reportes():
             breakdown['it_total'] += taxes.get('it', 0)
             breakdown['net_income'] += taxes.get('ingreso_neto', 0)
         
+        # Track Retention Liability globally for dashboard
+        retenciones_liability = 0
+        
         for _, row in df[df['tipo'] == 'Gasto'].iterrows():
             clas = logic.classify_account(row['categoria'])
             # OMITIR pagos de impuestos del Estado de Resultados
             if clas == 'Excluir P&L (Pago Pasivo)':
                 continue
-                
-            taxes = logic.calculate_taxes(row['monto'], row['tipo'], row['tiene_factura'], row['categoria'])
+            
+            # Use 'aplica_retencion' from row safely
+            ar = row.get('aplica_retencion', 0) == 1
+            taxes = logic.calculate_taxes(row['monto'], row['tipo'], row['tiene_factura'], row['categoria'], aplica_retencion=ar)
+            
             breakdown['iva_cf'] += taxes.get('iva_cf', 0)
             breakdown['gastos_netos'] += taxes.get('gasto_neto', 0)
+            
+            if 'retenciones' in taxes:
+                retenciones_liability += taxes['retenciones']['total']
 
         # Calcular Depreciación para el periodo (Anual por defecto)
         assets_df = db.get_assets()
@@ -289,100 +307,68 @@ def show_reportes():
         c2.metric("Aportes Capital", f"Bs {total_aportes:,.2f}", help="Dinero inyectado (No paga impuestos)")
         c3.metric("IVA a Pagar (Aprox)", f"Bs {max(0, breakdown['iva_df'] - breakdown['iva_cf']):,.2f}")
         c4.metric("Resultado Operativo", f"Bs {resultado_operativo:,.2f}", delta_color="normal", help="Incluye deducción por Depreciación")
+        
+        if retenciones_liability > 0:
+             st.info(f"💰 Se han generado **Bs {retenciones_liability:,.2f}** en Retenciones por Pagar (RC-IVA/IT) que debes declarar.")
 
         st.markdown("---")
-        
-        col_l, col_r = st.columns(2)
-        
-        with col_l:
-            st.subheader("Estado de Resultados (Provisional)")
-            st.write(pd.DataFrame({
-                "Concepto": ["Ingresos Operativos Netos (87%)", "(-) Gastos Netos Deducibles", "(-) Impuesto IT (3%)", "(-) Depreciación Activos", "= RESULTADO ANTES DE IMPUESTOS (IUE)"],
-                "Monto (Bs)": [breakdown['net_income'], -breakdown['gastos_netos'], -breakdown['it_total'], -depreciacion_periodo, resultado_operativo]
-            }))
 
-        with col_r:
-            st.subheader("Exportar Libros Legales")
-            
-            # Excel RCV
-            excel_data = reports.generate_excel_rcv(df)
-            st.download_button(
-                label="📥 Descargar RCV (Formato SIAT Excel)",
-                data=excel_data,
-                file_name=f"RCV_WARP6_{date.today()}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-            
-        # --- ESTADO DE RESULTADOS LEGAL (ESTRICTO) ---
-        # Filtramos solo lo que tiene factura (o son Ingresos declarados)
-        # Ingresos: Todo EXCEPTO Aportes de Capital
-        # Gastos: SOLO con factura.
+        # --- 1. CALCULATE ALL DATA FIRST ---
         
+        # A. Legal Results (Simple - Only Invoiced OR Retention)
         # Identificar aportes de capital
         is_aporte = df['categoria'].str.lower().str.contains('aporte', na=False) & \
                     df['categoria'].str.lower().str.contains('capital', na=False)
         
-        df_legal_ingresos = df[(df['tipo'] == 'Ingreso') & (~is_aporte)]  # Excluir aportes
+        df_legal_ingresos = df[(df['tipo'] == 'Ingreso') & (~is_aporte)]
         
-        # Robust filtering for boolean/int mixed types
-        df_legal_gastos = df[(df['tipo'] == 'Gasto') & (df['tiene_factura'].fillna(0).astype(int) == 1)]
+        # EXPANDED FILTER: Invoiced OR With Retention
+        # Safely handle if column doesn't exist yet (though migration handles it)
+        if 'aplica_retencion' in df.columns:
+            df_legal_gastos = df[(df['tipo'] == 'Gasto') & 
+                                 ((df['tiene_factura'].fillna(0) == 1) | (df['aplica_retencion'].fillna(0) == 1))]
+        else:
+            df_legal_gastos = df[(df['tipo'] == 'Gasto') & (df['tiene_factura'].fillna(0).astype(int) == 1)]
         
-        # Calcular totales para Legal
         leg_ingresos = df_legal_ingresos['monto'].sum()
-        leg_gastos = df_legal_gastos['monto'].sum()
+        # Note: leg_gastos sum of 'monto' is CASH value. For retentions, expenses > cash.
+        # We will iterate to get real total expense.
         
-        # Re-calcular impuestos Ley base a este subset
         leg_breakdown = {
-            'total_income': leg_ingresos,
-            'total_gastos': leg_gastos,
+            'total_income': leg_ingresos, 'total_gastos': 0, # Will calc
             'iva_df': 0, 'it_total': 0, 'net_income': 0,
             'iva_cf': 0, 'gastos_netos': 0
         }
         
-        # Procesar Ingresos (Legal)
         for _, row in df_legal_ingresos.iterrows():
             taxes = logic.calculate_taxes(row['monto'], row['tipo'], row['tiene_factura'], row['categoria'])
             leg_breakdown['iva_df'] += taxes['iva_df']
             leg_breakdown['it_total'] += taxes['it']
             leg_breakdown['net_income'] += taxes['ingreso_neto']
             
-        # Procesar Gastos (Solo Facturados)
         for _, row in df_legal_gastos.iterrows():
             clas = logic.classify_account(row['categoria'])
-            # OMITIR pagos de impuestos del Estado de Resultados Legal
-            if clas == 'Excluir P&L (Pago Pasivo)':
-                continue
-                
-            taxes = logic.calculate_taxes(row['monto'], row['tipo'], row['tiene_factura'], row['categoria'])
-            leg_breakdown['iva_cf'] += taxes['iva_cf']
-            leg_breakdown['gastos_netos'] += taxes['gasto_neto']
+            if clas == 'Excluir P&L (Pago Pasivo)': continue
             
-        # Calcular Depreciación para reporte Legal Estricto
+            ar = row.get('aplica_retencion', 0) == 1
+            taxes = logic.calculate_taxes(row['monto'], row['tipo'], row['tiene_factura'], row['categoria'], aplica_retencion=ar)
+            
+            leg_breakdown['iva_cf'] += taxes['iva_cf']
+            leg_breakdown['gastos_netos'] += taxes['gasto_neto'] # This includes Grossed Up amount
+            
+            # For 'total_gastos' display, we prefer the 'Accounting Expense' (Gross)
+            if 'monto_bruto' in taxes:
+                leg_breakdown['total_gastos'] += taxes['monto_bruto']
+            else:
+                leg_breakdown['total_gastos'] += row['monto']
+            
         assets_df = db.get_assets()
         monthly_dep = logic.calculate_period_depreciation(assets_df, 12)
-        
-        # Restar depreciación del resultado
         leg_resultado = leg_breakdown['net_income'] - leg_breakdown['gastos_netos'] - leg_breakdown['it_total'] - monthly_dep
+        
+        pdf_er_legal_simple = reports.generate_pdf_financials(leg_ingresos, leg_breakdown['total_gastos'], leg_resultado, leg_breakdown, depreciation=monthly_dep)
 
-        # Generar PDF pasando el resultado correcto y la depreciación explícita
-        pdf_data = reports.generate_pdf_financials(leg_ingresos, leg_gastos, leg_resultado, leg_breakdown, depreciation=monthly_dep)
-        st.download_button(
-            label="📄 Estado de Resultados (Legal - Solo Facturado)",
-            data=pdf_data,
-            file_name=f"ER_Legal_Estricto_{date.today()}.pdf",
-            mime="application/pdf",
-            help="Excluye gastos sin factura (Sueldos en negro, recibos, etc.)",
-            key="btn_er_legal_simple"
-        )
-        
-        # --- CÁLCULO DE DATA LEGAL (FISCAL) ESTRICTA ---
-        # SE CALCULA PRIMERO PARA OBTENER EL IUE LEGAL QUE SE USARÁ EN EL GERENCIAL
-        
-        # 1. Depreciación Común
-        assets_df = db.get_assets()
-        monthly_dep = logic.calculate_period_depreciation(assets_df, 12) # Anual
-        
-        # 2. Estructura Legal
+        # B. Legal Detailed (Fiscal Strict)
         legal_detailed_data = {
             'ingresos': {'total': 0, 'items': []},
             'costos_ventas': {'total': 0, 'items': []},
@@ -394,111 +380,111 @@ def show_reportes():
             'kpis': {}
         }
         
-        # Depreciación Items (Fiscal y Gerencial comparten esto)
         dep_items = []
         for _, asset in assets_df.iterrows():
              annual_dep = asset['valor_inicial'] / asset['vida_util_anios']
-             item_dep = {
-                 'fecha': str(asset['fecha_adquisicion']), 
-                 'detalle': f"Depreciación: {asset['nombre']}", 
-                 'monto': annual_dep
-             }
-             dep_items.append(item_dep)
-             
+             dep_items.append({'fecha': str(asset['fecha_adquisicion']), 'detalle': f"Depreciación: {asset['nombre']}", 'monto': annual_dep})
         legal_detailed_data['depreciacion']['items'] = dep_items
 
-        # Ingresos facturados
         for _, row in df_legal_ingresos.iterrows():
              if "aporte" not in row['categoria'].lower():
                  legal_detailed_data['ingresos']['total'] += row['monto']
-                 legal_detailed_data['ingresos']['items'].append({
-                     'fecha': str(row['fecha']), 'detalle': f"{row['detalle']} ({row['categoria']})", 'monto': row['monto']
-                 })
+                 legal_detailed_data['ingresos']['items'].append({'fecha': str(row['fecha']), 'detalle': f"{row['detalle']} ({row['categoria']})", 'monto': row['monto']})
         
-        # Gastos SOLO facturados + clasificación
+        # Accumulators for Deducible Expense (Neto or Gross)
+        deducible_costos = 0
+        deducible_personal = 0
+        deducible_financieros = 0
+        deducible_fijos = 0
+        deducible_impuestos = 0 # Direct taxes like ITF, IPBI (not IVA/IT which are separate)
+
         for _, row in df_legal_gastos.iterrows():
             clas = logic.classify_account(row['categoria'])
-            item_dict = {'fecha': str(row['fecha']), 'detalle': f"{row['detalle']} ({row['categoria']})", 'monto': row['monto']}
+            ar = row.get('aplica_retencion', 0) == 1
             
-            if clas == 'Excluir P&L (Pago Pasivo)':
-                continue
+            # Calculate correct expense amount (Gross if retention)
+            if ar:
+                 # Re-calc handy
+                 bruto, _, _ = logic.calculate_grossing_up(row['monto'])
+                 expense_amount = bruto
+                 deducible_amount = bruto # 100% of Gross is expense
+                 detalle_str = f"{row['detalle']} (Retención)"
+            else:
+                 expense_amount = row['monto']
+                 deducible_amount = row['monto'] * 0.87 # 87% Net Cost
+                 detalle_str = f"{row['detalle']} ({row['categoria']})"
+            
+            item_dict = {'fecha': str(row['fecha']), 'detalle': detalle_str, 'monto': expense_amount}
+            
+            if clas == 'Excluir P&L (Pago Pasivo)': continue
             elif clas == 'Impuestos': 
-                 legal_detailed_data['impuestos']['total'] += row['monto']
+                 legal_detailed_data['impuestos']['total'] += expense_amount
                  legal_detailed_data['impuestos']['items'].append(item_dict)
+                 deducible_impuestos += deducible_amount # Usually taxes are 100% deducible? No, usually deductible taxes are not IVA. IT is deductible. 
+                 # If 'Impuestos' category has invoice? Unlikely. Assuming 100% deductible if classified as Impuestos (like Tasas).
+                 # But in previous code, it multiplied legal_detailed_data['impuestos']['total'] * 0.87? No, it used 'impuestos_directos_legal = total'. (Line 396 in orig).
+                 # So Impuestos were treated as 100% deductible. Correct.
+                 # deducible_impuestos = legal_detailed_data['impuestos']['total'] # Will calc at end - This line is wrong, it should accumulate
             elif clas == 'Costo de Ventas': 
-                legal_detailed_data['costos_ventas']['total'] += row['monto']
+                legal_detailed_data['costos_ventas']['total'] += expense_amount
                 legal_detailed_data['costos_ventas']['items'].append(item_dict)
+                deducible_costos += deducible_amount
             elif clas == 'Gastos de Personal': 
-                legal_detailed_data['gastos_personal']['total'] += row['monto']
+                legal_detailed_data['gastos_personal']['total'] += expense_amount
                 legal_detailed_data['gastos_personal']['items'].append(item_dict)
+                deducible_personal += deducible_amount
             elif clas == 'Gastos Financieros': 
-                legal_detailed_data['gastos_financieros']['total'] += row['monto']
+                legal_detailed_data['gastos_financieros']['total'] += expense_amount
                 legal_detailed_data['gastos_financieros']['items'].append(item_dict)
+                deducible_financieros += deducible_amount
             else: 
-                legal_detailed_data['gastos_fijos']['total'] += row['monto']
+                legal_detailed_data['gastos_fijos']['total'] += expense_amount
                 legal_detailed_data['gastos_fijos']['items'].append(item_dict)
+                deducible_fijos += deducible_amount
         
-        # Agregar IT calculado Legal
         it_legal = legal_detailed_data['ingresos']['total'] * 0.03
         legal_detailed_data['impuestos']['total'] += it_legal
         legal_detailed_data['impuestos']['items'].append({'fecha': '-', 'detalle': 'IT Generado por Ventas (3%)', 'monto': it_legal})
+        deducible_impuestos += it_legal # IT is also a deductible expense
         
-        # KPIs Legales
         ingresos_brutos_legal = legal_detailed_data['ingresos']['total']
         iva_df_legal = ingresos_brutos_legal * 0.13
         ingresos_netos_legal = ingresos_brutos_legal - iva_df_legal
         
-        costos_netos_legal = legal_detailed_data['costos_ventas']['total'] * 0.87
-        gastos_personal_netos = legal_detailed_data['gastos_personal']['total'] * 0.87
-        gastos_fijos_netos = legal_detailed_data['gastos_fijos']['total'] * 0.87
-        gastos_financieros_netos = legal_detailed_data['gastos_financieros']['total'] * 0.87
-        impuestos_directos_legal = legal_detailed_data['impuestos']['total']
+        # Use calculated deducibles
+        costos_netos_legal = deducible_costos
+        gastos_personal_netos = deducible_personal
+        gastos_fijos_netos = deducible_fijos
+        gastos_financieros_netos = deducible_financieros
+        impuestos_directos_legal = deducible_impuestos
         
         legal_detailed_data['kpis']['margen_bruto'] = ingresos_netos_legal - costos_netos_legal
-        legal_detailed_data['kpis']['bait'] = (legal_detailed_data['kpis']['margen_bruto'] - 
-                                                gastos_personal_netos - 
-                                                gastos_fijos_netos - 
-                                                monthly_dep)
-        legal_detailed_data['kpis']['utilidad_antes_iue'] = (legal_detailed_data['kpis']['bait'] - 
-                                                              gastos_financieros_netos - 
-                                                              impuestos_directos_legal)
+        legal_detailed_data['kpis']['bait'] = (legal_detailed_data['kpis']['margen_bruto'] - gastos_personal_netos - gastos_fijos_netos - monthly_dep)
+        legal_detailed_data['kpis']['utilidad_antes_iue'] = (legal_detailed_data['kpis']['bait'] - gastos_financieros_netos - impuestos_directos_legal)
         legal_detailed_data['kpis']['iue'] = max(0, legal_detailed_data['kpis']['utilidad_antes_iue'] * 0.25)
         legal_detailed_data['kpis']['utilidad_neta'] = legal_detailed_data['kpis']['utilidad_antes_iue'] - legal_detailed_data['kpis']['iue']
+        
+        pdf_er_legal_detailed = reports.generate_pdf_legal_detailed(legal_detailed_data, "Acumulado Anual")
 
-        # --- CÁLCULO GERENCIAL DETALLADO ---
-        # Preparar estructura de datos granular
+
+        # C. Managerial Detailed
         mgr_data = {
-            'ingresos': {'total': 0, 'items': []},
-            'costos_ventas': {'total': 0, 'items': []},
-            'gastos_personal': {'total': 0, 'items': []},
-            'gastos_fijos': {'total': 0, 'items': []},
-            'gastos_financieros': {'total': 0, 'items': []},
-            'impuestos': {'total': 0, 'items': []},
-            'depreciacion': {'total': 0, 'items': []},
-            'kpis': {}
+            'ingresos': {'total': 0, 'items': []}, 'costos_ventas': {'total': 0, 'items': []},
+            'gastos_personal': {'total': 0, 'items': []}, 'gastos_fijos': {'total': 0, 'items': []},
+            'gastos_financieros': {'total': 0, 'items': []}, 'impuestos': {'total': 0, 'items': []},
+            'depreciacion': {'total': monthly_dep, 'items': dep_items}, 'kpis': {}
         }
         
-        # 1. Ingresos Detallados
         for _, row in df[df['tipo'] == 'Ingreso'].iterrows():
-             # Excluir 'Aporte capital' si queremos ser puros, logicamente ya lo hacemos en impuestos
              if "aporte" not in row['categoria'].lower():
                  mgr_data['ingresos']['total'] += row['monto']
-                 mgr_data['ingresos']['items'].append({
-                     'fecha': str(row['fecha']), 'detalle': f"{row['detalle']} ({row['categoria']})", 'monto': row['monto']
-                 })
+                 mgr_data['ingresos']['items'].append({'fecha': str(row['fecha']), 'detalle': f"{row['detalle']} ({row['categoria']})", 'monto': row['monto']})
                  
-        # 2. Gastos Detallados + Clasificación
-        gastos_df_all = df[df['tipo'] == 'Gasto']
-        
-        for _, row in gastos_df_all.iterrows():
+        for _, row in df[df['tipo'] == 'Gasto'].iterrows():
             clas = logic.classify_account(row['categoria'])
             item_dict = {'fecha': str(row['fecha']), 'detalle': f"{row['detalle']} ({row['categoria']})", 'monto': row['monto']}
-            
-            # Clasificacion
-            if clas == 'Excluir P&L (Pago Pasivo)':
-                continue # No entra al Estado de Resultados
+            if clas == 'Excluir P&L (Pago Pasivo)': continue
             elif clas == 'Impuestos': 
-                 # Los impuestos directos pagados explicitamente (Tasas, Patentes, IT no virtual)
                  mgr_data['impuestos']['total'] += row['monto']
                  mgr_data['impuestos']['items'].append(item_dict)
             elif clas == 'Costo de Ventas': 
@@ -514,88 +500,161 @@ def show_reportes():
                 mgr_data['gastos_fijos']['total'] += row['monto']
                 mgr_data['gastos_fijos']['items'].append(item_dict)
         
-        # Agregar IT Calculado como Gasto de Impuestos (porque no siempre se registra el gasto)
-        # Ojo: Si ya registramos el IT como gasto automatico en DB, se duplicaria.
-        # Asumimos que el usuario NO registra el IT manualmente, asi que lo agregamos como item "Virtual"
-        # Pero el IT es 3% de Ingresos.
         it_virtual = mgr_data['ingresos']['total'] * 0.03
         mgr_data['impuestos']['total'] += it_virtual
         mgr_data['impuestos']['items'].append({'fecha': '-', 'detalle': 'IT Generado por Ventas (3%)', 'monto': it_virtual})
 
-        # 3. Depreciación (Reusar cálculo previo)
-        mgr_data['depreciacion']['total'] = monthly_dep
-        mgr_data['depreciacion']['items'] = dep_items # Reusar lista
-             
-        # 4. KPIs
         mgr_data['kpis']['margen_bruto'] = mgr_data['ingresos']['total'] - mgr_data['costos_ventas']['total']
-        
-        mgr_data['kpis']['bait'] = (
-            mgr_data['kpis']['margen_bruto'] 
-            - mgr_data['gastos_personal']['total'] 
-            - mgr_data['gastos_fijos']['total'] 
-            - mgr_data['depreciacion']['total']
-        )
-        
-        mgr_data['kpis']['utilidad_antes_iue'] = (
-            mgr_data['kpis']['bait'] 
-            - mgr_data['gastos_financieros']['total'] 
-            - mgr_data['impuestos']['total']
-        )
-        
-        # USAR IUE LEGAL (REAL) para reflejar la salida de caja verdadera
+        mgr_data['kpis']['bait'] = mgr_data['kpis']['margen_bruto'] - mgr_data['gastos_personal']['total'] - mgr_data['gastos_fijos']['total'] - mgr_data['depreciacion']['total']
+        mgr_data['kpis']['utilidad_antes_iue'] = mgr_data['kpis']['bait'] - mgr_data['gastos_financieros']['total'] - mgr_data['impuestos']['total']
         mgr_data['kpis']['iue'] = legal_detailed_data['kpis']['iue']
         mgr_data['kpis']['utilidad_neta'] = mgr_data['kpis']['utilidad_antes_iue'] - mgr_data['kpis']['iue']
         
+        pdf_mgr_detailed = reports.generate_pdf_managerial_detailed(mgr_data, "Acumulado Anual")
         
-        pdf_mgr = reports.generate_pdf_managerial_detailed(mgr_data, "Acumulado Anual")
+        # D. Balance Sheets
+        balance_data = logic.calculate_balance_sheet(df, assets_df, cutoff_date)
+        balance_real_data = logic.calculate_balance_sheet_real(df, assets_df, cutoff_date)
+        
+        pdf_balance_sin = reports.generate_pdf_balance_sin(balance_data, f"Al {cutoff_date.strftime('%d/%m/%Y')}")
+        pdf_balance_real = reports.generate_pdf_balance_real(balance_real_data, f"Al {cutoff_date.strftime('%d/%m/%Y')}")
+        
+        # E. Gerencial Completo
+        pdf_gerencial_completo = reports.generate_pdf_gerencial_completo(balance_data, mgr_data, f"Gestión 2025 (Al {cutoff_date})")
+        
+        # F. Excel RCV
+        excel_rcv = reports.generate_excel_rcv(df)
+
+        # --- 2. RENDER SECTIONS ---
+
+        # Provisional View (Full Width)
+        st.subheader("Estado de Resultados (Provisional)")
+        st.write(pd.DataFrame({
+            "Concepto": ["Ingresos Operativos Netos (87%)", "(-) Gastos Netos Deducibles", "(-) Impuesto IT (3%)", "(-) Depreciación Activos", "= RESULTADO ANTES DE IMPUESTOS (IUE)"],
+            "Monto (Bs)": [breakdown['net_income'], -breakdown['gastos_netos'], -breakdown['it_total'], -depreciacion_periodo, resultado_operativo]
+        }))
+        
+        st.markdown("---")
+        
+        # COLUMNS LAYOUT
+        st.markdown("### 📂 Descarga de Reportes")
+        col_legal, col_gerencial = st.columns(2)
+        
+        with col_legal:
+            st.subheader("🏛️ Reportes Legales (SIN)")
+            st.info("Basado estrictamente en facturas.")
+            
+            # 1. ER Legal
+            st.download_button(
+                label="📄 Estado de Resultados (Legal)",
+                data=pdf_er_legal_simple,
+                file_name=f"ER_Legal_Simple_{date.today()}.pdf",
+                mime="application/pdf",
+                help="Excluye gastos sin factura",
+                key="btn_er_legal_simple"
+            )
+            
+            # 2. ER Legal Detallado
+            st.download_button(
+                label="⚖️ Estado de Resultados Legal Detallado",
+                data=pdf_er_legal_detailed,
+                file_name=f"ER_Legal_Detallado_{date.today()}.pdf",
+                mime="application/pdf",
+                help="Formato detallado con items y depreciación",
+                key="btn_er_legal_detallado"
+            )
+            
+            # 3. Balance Legal SIN
+            st.download_button(
+                label="🏛️ Balance General Legal (SIN)",
+                data=pdf_balance_sin,
+                file_name=f"Balance_General_SIN_{cutoff_date.strftime('%Y%m%d')}.pdf",
+                mime="application/pdf",
+                help="Solo transacciones facturadas",
+                key="btn_balance_sin"
+            )
+            
+        with col_gerencial:
+            st.subheader("📈 Reportes Gerenciales (Reales)")
+            st.info("Incluye realidad de caja y gastos sin factura.")
+            
+            # 1. ER Gerencial Detallado
+            st.download_button(
+                label="📊 Estado de Resultados Gerencial Detallado",
+                data=pdf_mgr_detailed,
+                file_name=f"ER_Gerencial_Detallado_{date.today()}.pdf",
+                mime="application/pdf",
+                help="Incluye desglose de cada transacción, EBITDA, Costo de Ventas y Márgenes.",
+                key="btn_er_gerencial_detallado"
+            )
+            
+            # 2. Balance Gerencial
+            st.download_button(
+                label="💰 Balance General Gerencial (Real)",
+                data=pdf_balance_real,
+                file_name=f"Balance_General_Real_{cutoff_date.strftime('%Y%m%d')}.pdf",
+                mime="application/pdf",
+                help="Refleja caja real y gastos no deducibles",
+                key="btn_balance_real"
+            )
+            
+            # 3. Informe Completo
+            st.download_button(
+                label="📈 Informe Gerencial Completo",
+                data=pdf_gerencial_completo,
+                file_name=f"Informe_Gerencial_{cutoff_date.strftime('%Y%m%d')}.pdf",
+                mime="application/pdf",
+                help="Informe estratégico de 5 páginas",
+                key="btn_informe_gerencial_completo"
+            )
+
+
+        st.markdown("---")
+        
+        # LIBRO DIARIO
+        st.subheader("📚 Libros Contables")
+        # Generate Libro Diario PDF
+        pdf_diario = reports.generate_pdf_libro_diario(df)
         st.download_button(
-            label="📊 Estado de Resultados (GERENCIAL DETALLADO)",
-            data=pdf_mgr,
-            file_name=f"ER_Gerencial_Detallado_{date.today()}.pdf",
+            label="📒 Descargar Libro Diario (PDF)",
+            data=pdf_diario,
+            file_name=f"Libro_Diario_{date.today()}.pdf",
             mime="application/pdf",
-            help="Incluye desglose de cada transacción, EBITDA, Costo de Ventas y Márgenes.",
-            key="btn_er_gerencial_detallado"
+            key="btn_libro_diario"
         )
         
-        # --- REPORTE LEGAL DETALLADO (Con factura + Depreciación) ---
         st.markdown("---")
-        st.subheader("⚖️ Estado de Resultados Legal (SIN)")
         
-        # (Calculado al inicio del bloque)
+        # RCV Button (Bottom)
+        st.subheader("📥 Exportación de Datos")
+        st.download_button(
+            label="📥 Descargar RCV (Formato SIAT Excel)",
+            data=excel_rcv,
+            file_name=f"RCV_WARP6_{date.today()}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="btn_rcv_excel"
+        )
         
-        # --- NUEVO: REPORTE DE CAJA REAL FINAL ---
         st.markdown("---")
-        st.subheader("💰 Posición de Caja Neta Final (Liquidez Real)")
-        st.info("Este cálculo muestra tu dinero real disponible tras pagar todos los gastos (con/sin factura) y los impuestos de ley.")
 
-        # 1. Caja Operativa Bruta (Ingresos Reales - Gastos Reales Totales)
-        # Ingresos Reales: Ventas + Aportes (todo lo que entra al banco/bolsillo)
-        # Gastos Reales: TODO lo que sale (con y sin factura)
+        # CAJA NETA FINAL (Moved here as context)
+        st.subheader("💰 Posición de Caja Neta Final (Liquidez Real)")
+        st.info("Dinero disponible tras pagar todos los gastos e impuestos.")
         
-        # Ingresos Totales (Ventas + Aportes EFECTIVO)
-        # IMPORTANTE: Excluir aportes que son en especie (Activos)
+        # Recalculate quick numbers for Box
         ingresos_efectivo = df[(df['tipo'] == 'Ingreso') & 
                                (~df['categoria'].str.lower().str.contains('activo', na=False))]['monto'].sum()
         
-        total_inflow = ingresos_efectivo
-        
-        # Gastos Totales Reales (Incluyendo los "sin factura", EXCLUYENDO pagos de impuestos pasados para no duplicar)
-        # OJO: Aquí sí queremos RESTAR los pagos de impuestos reales (IVA/IT pagados) porque es salida de caja.
-        # Pero NO restamos la depreciación (no es salida de efectivo).
-        
-        # Calcular salidas de efectivo reales
         total_outflow = 0
         pagos_impuestos_realizados = 0
-        
         for _, row in df[df['tipo'] == 'Gasto'].iterrows():
-             # Sumar todo gasto real
              total_outflow += row['monto']
              
              # Rastrear cuánto pagamos de impuestos (para mostrarlo desglosado si se quiere)
              if "impuesto" in row['categoria'].lower() or "it" in row['categoria'].lower():
                  pagos_impuestos_realizados += row['monto']
 
-        caja_operativa_bruta = total_inflow - total_outflow
+        caja_operativa_bruta = ingresos_efectivo - total_outflow
         
         # 2. Impuestos LEGALES Por Pagar (Futuros)
         # IUE que se pagará al cierre de gestión (Calculado en el reporte legal)
@@ -610,64 +669,6 @@ def show_reportes():
         col_caja3.metric("3. (=) CAJA LÍQUIDA REAL", f"Bs {caja_final_neta:,.2f}", delta="Tu ganancia real de bolsillo")
         
         st.markdown("---")
-        
-        pdf_legal_det = reports.generate_pdf_legal_detailed(legal_detailed_data, "Acumulado Anual")
-        st.download_button(
-            label="⚖️ Estado de Resultados (LEGAL DETALLADO - Incluye Depreciación)",
-            data=pdf_legal_det,
-            file_name=f"ER_Legal_Detallado_{date.today()}.pdf",
-            mime="application/pdf",
-            help="Solo gastos facturados + Depreciación. Cumplimiento normativo.",
-            key="btn_er_legal_detallado"
-        )
-
-        st.markdown("---")
-        
-        # --- BALANCE GENERAL (SIN / FORMAL) ---
-        st.subheader("📗 Balance General")
-        
-        # Calcular Balance usando la nueva lógica CONTABLE balanceada
-        assets_df = db.get_assets()
-        balance_data = logic.calculate_balance_sheet(df, assets_df, cutoff_date)
-        
-        pdf_balance = reports.generate_pdf_balance_sin(balance_data, f"Al {cutoff_date.strftime('%d/%m/%Y')}")
-        
-        # Calcular TAMBIÉN el Balance Real (con todos los gastos)
-        balance_real_data = logic.calculate_balance_sheet_real(df, assets_df, cutoff_date)
-        pdf_balance_real = reports.generate_pdf_balance_real(balance_real_data, f"Al {cutoff_date.strftime('%d/%m/%Y')}")
-        
-        c_bal1, c_bal2 = st.columns(2)
-        with c_bal1:
-            st.download_button(
-                label="🏛️ Balance General (SIN - Solo Facturado)",
-                data=pdf_balance,
-                file_name=f"Balance_General_SIN_{cutoff_date.strftime('%Y%m%d')}.pdf",
-                mime="application/pdf",
-                help="Formato oficial: Solo transacciones facturadas. Utilidad fiscal alta pero caja 'fantasma'.",
-                key="btn_balance_sin"
-            )
-        
-        with c_bal2:
-            st.download_button(
-                label="💰 Balance General (REAL - Gerencial)",
-                data=pdf_balance_real,
-                file_name=f"Balance_General_Real_{cutoff_date.strftime('%Y%m%d')}.pdf",
-                mime="application/pdf",
-                help="Refleja caja REAL incluyendo gastos no deducibles. Recomendado para gestión interna.",
-                key="btn_balance_real"
-            )
-            
-        # --- REPORTE GERENCIAL COMPLETO ---
-        pdf_gerencial = reports.generate_pdf_gerencial_completo(balance_data, mgr_data, f"Gestión 2025 (Al {cutoff_date})")
-        with c_bal2:
-            st.download_button(
-                label="📈 Descargar Informe Gerencial Completo",
-                data=pdf_gerencial,
-                file_name=f"Informe_Gerencial_Estrategico_{cutoff_date.strftime('%Y%m%d')}.pdf",
-                mime="application/pdf",
-                help="Informe de 5 páginas con KPIs, márgenes por proyecto y proyecciones.",
-                key="btn_informe_gerencial_completo"
-            )
         
         # --- VALIDACIÓN Y COMPARACIÓN ---
         st.markdown("#### ✅ Validación de Ecuación Contable")
@@ -723,10 +724,6 @@ def show_reportes():
         else:
             st.success("¡Excelente! Todos tus gastos tienen factura.")
             
-        st.markdown("---")
-
-        st.write("📚 **Libros Legales (Normativa)**")
-        
         
         st.markdown("---")
         
@@ -910,10 +907,11 @@ def show_importador():
     Carga tus transacciones desde Excel usando nuestra plantilla estandarizada.
     
     **Instrucciones:**
-    1. Descarga la plantilla.
+    1. Descarga la plantilla (¡Actualizada!).
     2. Copia tus datos en las columnas correspondientes.
        - *Tipo*: Debe ser 'Ingreso' o 'Gasto'.
        - *Tiene_Factura*: 'Si' o 'No'.
+       - *Aplica_Retencion*: 'Si' si deseas que el sistema calcule el Grossing Up (asumiendo impuestos).
     3. Sube el archivo completado.
 
     > **ℹ️ Categorías Especiales:**
@@ -924,9 +922,9 @@ def show_importador():
     # 1. Download Template
     template_data = importer.generate_template()
     st.download_button(
-        label="📥 Descargar Plantilla Excel",
+        label="📥 Descargar Plantilla Excel (v2 - con Retenciones)",
         data=template_data,
-        file_name="plantilla_importacion_warp6.xlsx",
+        file_name="plantilla_importacion_warp6_v2.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
     
@@ -962,7 +960,8 @@ def show_importador():
                         row['nit'],
                         row['monto'],
                         row['metodo_pago'],
-                        row['tiene_factura']
+                        row['tiene_factura'],
+                        row['aplica_retencion']
                     )
                     count += 1
                     progress_bar.progress(count / len(df_preview))

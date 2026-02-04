@@ -10,7 +10,8 @@ TEMPLATE_COLUMNS = [
     "NIT",
     "Monto",
     "Metodo_Pago",
-    "Tiene_Factura (Si/No)"
+    "Tiene_Factura (Si/No)",
+    "Aplica_Retencion (Si/No)"
 ]
 
 def generate_template():
@@ -29,11 +30,12 @@ def process_import_file(uploaded_file):
         df = pd.read_excel(uploaded_file)
         
         # Check basic columns existence (allowing flexibility in naming if possible, but strict for now)
-        # To make it user friendly, we could normalize headers, but let's assume they use the template.
         # We will map "Template Columns" to "DB Columns"
         
+        # If user uploads old template (9 cols), we should gracefully handle it, OR enforce 10.
+        # Enforcing new template is safer to ensure they know about the feature.
         if len(df.columns) != len(TEMPLATE_COLUMNS):
-            return None, f"El archivo tiene {len(df.columns)} columnas, se esperaban {len(TEMPLATE_COLUMNS)}. Por favor use la plantilla."
+            return None, f"El archivo tiene {len(df.columns)} columnas, se esperaban {len(TEMPLATE_COLUMNS)}. Por favor descargue la NUEVA plantilla."
             
         normalized_data = []
         errors = []
@@ -49,14 +51,20 @@ def process_import_file(uploaded_file):
                 nit = str(row.iloc[5]).strip() if pd.notna(row.iloc[5]) else ""
                 monto = float(row.iloc[6])
                 metodo_pago = str(row.iloc[7]).strip()
-                tiene_factura_raw = str(row.iloc[8]).strip().lower()
                 
-                # Robust boolean parsing
+                # Robust boolean parsing - Factura
                 tf_str = str(row.iloc[8]).strip().lower()
                 if any(x in tf_str for x in ['si', 'sí', 'yes', 'true', '1', 'con factura']):
                     tiene_factura = True
                 else:
                     tiene_factura = False
+                
+                # Robust boolean parsing - Retencion
+                ar_str = str(row.iloc[9]).strip().lower() if pd.notna(row.iloc[9]) else "no"
+                if any(x in ar_str for x in ['si', 'sí', 'yes', 'true', '1']):
+                    aplica_retencion = True
+                else:
+                    aplica_retencion = False
                 
                 if tipo not in ['Ingreso', 'Gasto']:
                     errors.append(f"Fila {index+2}: Tipo '{tipo}' inválido. Use 'Ingreso' o 'Gasto'.")
@@ -71,7 +79,8 @@ def process_import_file(uploaded_file):
                     'nit': nit,
                     'monto': monto,
                     'metodo_pago': metodo_pago,
-                    'tiene_factura': tiene_factura
+                    'tiene_factura': tiene_factura,
+                    'aplica_retencion': aplica_retencion
                 })
                 
             except Exception as e:

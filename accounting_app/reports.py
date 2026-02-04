@@ -575,8 +575,12 @@ def generate_pdf_balance_sin(balance_data, period_name="Anual"):
     data.append(["PASIVO", "", ""])
     data.append(["PASIVO CORRIENTE", "", ""])
     data.append(["   1. Débito Fiscal IVA por Pagar", f"{pas['corriente']['iva_por_pagar']:,.2f}", ""])
-    data.append(["   2. Impuesto a las Transacciones (IT) por Pagar", f"{pas['corriente']['it_por_pagar']:,.2f}", ""])
+    data.append(["   2. Impues. Transacciones (IT) por Pagar", f"{pas['corriente']['it_por_pagar']:,.2f}", ""])
     data.append(["   3. IUE por Pagar", f"{pas['corriente']['iue_por_pagar']:,.2f}", ""])
+    # Safely get retenciones if logic updated, default 0
+    ret_pay = pas['corriente'].get('retenciones_por_pagar', 0)
+    data.append(["   4. Retenciones (RC-IVA/IT) por Pagar", f"{ret_pay:,.2f}", ""])
+    
     data.append(["   TOTAL PASIVO", "", f"{pas['corriente']['total']:,.2f}"])
     data.append(["", "", ""])
     
@@ -600,7 +604,7 @@ def generate_pdf_balance_sin(balance_data, period_name="Anual"):
         ('LINEABOVE', (2,10), (2,10), 1, colors.black),
         
         ('FONTNAME', (0,11), (0,11), 'Helvetica-Bold'), # PASIVO Title
-        ('FONTNAME', (0,20), (0,20), 'Helvetica-Bold'), # PATRIMONIO Title
+        ('FONTNAME', (0,21), (0,21), 'Helvetica-Bold'), # PATRIMONIO Title (Shifted down by 1 row)
         
         ('FONTNAME', (0,-1), (-1,-1), 'Helvetica-Bold'), # TOTAL P+P
         ('LINEABOVE', (2,-1), (2,-1), 1, colors.black),
@@ -779,8 +783,10 @@ def generate_pdf_balance_real(balance_data, period_name="Anual"):
     data.append(["PASIVO", "", ""])
     data.append(["PASIVO CORRIENTE", "", ""])
     data.append(["   1. Débito Fiscal IVA por Pagar", f"{pas['corriente']['iva_por_pagar']:,.2f}", ""])
-    data.append(["   2. Impuesto a las Transacciones (IT) por Pagar", f"{pas['corriente']['it_por_pagar']:,.2f}", ""])
+    data.append(["   2. Impues. Transacciones (IT) por Pagar", f"{pas['corriente']['it_por_pagar']:,.2f}", ""])
     data.append(["   3. IUE por Pagar (25% s/Utilidad Fiscal)", f"{pas['corriente']['iue_por_pagar']:,.2f}", ""])
+    ret_pay = pas['corriente'].get('retenciones_por_pagar', 0)
+    data.append(["   4. Retenciones (RC-IVA/IT) por Pagar", f"{ret_pay:,.2f}", ""])
     data.append(["   TOTAL PASIVO", "", f"{pas['corriente']['total']:,.2f}"])
     data.append(["", "", ""])
     
@@ -818,7 +824,7 @@ def generate_pdf_balance_real(balance_data, period_name="Anual"):
     # Notas Explicativas
     elements.append(Paragraph("<b>Notas Importantes:</b>", styles['Heading3']))
     elements.append(Paragraph(f"1. <b>Caja Real</b>: Refleja el saldo bancario real después de TODOS los movimientos (con y sin factura).", styles['Normal']))
-    elements.append(Paragraph(f"2. <b>Utilidad Fiscal</b>: Bs {balance_data['info_adicional']['utilidad_fiscal_declarada']:,.2f} - Base para cálculo de IUE (25%). Se calcula solo con gastos facturados.", styles['Normal']))
+    elements.append(Paragraph(f"2. <b>Utilidad Fiscal</b>: Bs {balance_data['patrimonio']['utilidad_fiscal']:,.2f} - Base para cálculo de IUE (25%). Se calcula solo con gastos facturados.", styles['Normal']))
     elements.append(Paragraph(f"3. <b>Gastos No Deducibles</b>: Bs {balance_data['info_adicional']['gastos_sin_factura']:,.2f} - Gastos sin factura que redujeron la caja pero NO son deducibles para impuestos.", styles['Normal']))
     elements.append(Paragraph("4. <b>Recomendación</b>: Exigir facturas en todas las compras futuras para maximizar deducciones fiscales.", styles['Normal']))
     

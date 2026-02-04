@@ -24,9 +24,17 @@ def init_db():
             nit TEXT,
             monto REAL NOT NULL,
             metodo_pago TEXT,
-            tiene_factura BOOLEAN DEFAULT 0
+            tiene_factura BOOLEAN DEFAULT 0,
+            aplica_retencion BOOLEAN DEFAULT 0
         )
     ''')
+    
+    # MIGRATION CHECK: Add aplica_retencion if not exists
+    try:
+        c.execute("SELECT aplica_retencion FROM transactions LIMIT 1")
+    except sqlite3.OperationalError:
+        c.execute("ALTER TABLE transactions ADD COLUMN aplica_retencion BOOLEAN DEFAULT 0")
+        conn.commit()
     
     # Tabla de Activos Fijos
     c.execute('''
@@ -44,13 +52,13 @@ def init_db():
     conn.commit()
     conn.close()
 
-def add_transaction(fecha, tipo, categoria, detalle, n_factura, nit, monto, metodo_pago, tiene_factura):
+def add_transaction(fecha, tipo, categoria, detalle, n_factura, nit, monto, metodo_pago, tiene_factura, aplica_retencion=False):
     conn = get_connection()
     c = conn.cursor()
     c.execute('''
-        INSERT INTO transactions (fecha, tipo, categoria, detalle, n_factura, nit, monto, metodo_pago, tiene_factura)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (fecha, tipo, categoria, detalle, n_factura, nit, monto, metodo_pago, tiene_factura))
+        INSERT INTO transactions (fecha, tipo, categoria, detalle, n_factura, nit, monto, metodo_pago, tiene_factura, aplica_retencion)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (fecha, tipo, categoria, detalle, n_factura, nit, monto, metodo_pago, tiene_factura, aplica_retencion))
     conn.commit()
     conn.close()
 
