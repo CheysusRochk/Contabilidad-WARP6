@@ -496,7 +496,17 @@ def show_reportes():
             
             item_dict = {'fecha': str(row['fecha']), 'detalle': detalle_str, 'monto': expense_amount}
             
-            if clas == 'Excluir P&L (Pago Pasivo)': continue
+            if clas == 'Excluir P&L (Pago Pasivo)':
+                 # Allow Tax payments for Cash Basis Managerial Report
+                 # User wants to see "Pago IVA", "Pago IT" from Excel
+                 cat_str = row['categoria'].lower()
+                 if "pago" in cat_str and ("impuesto" in cat_str or "iva" in cat_str or "it" in cat_str):
+                      mgr_data['impuestos']['total'] += expense_amount
+                      mgr_data['impuestos']['items'].append(item_dict)
+                      continue
+                 else:
+                      continue
+
             elif clas == 'Impuestos': 
                  mgr_data['impuestos']['total'] += expense_amount
                  mgr_data['impuestos']['items'].append(item_dict)
@@ -513,15 +523,10 @@ def show_reportes():
                 mgr_data['gastos_fijos']['total'] += expense_amount
                 mgr_data['gastos_fijos']['items'].append(item_dict)
         
-        # Taxes: Add IVA Neto to be realistic
-        iva_a_pagar_mgr = max(0, breakdown['iva_df'] - breakdown['iva_cf'])
-        mgr_data['impuestos']['total'] += iva_a_pagar_mgr
-        mgr_data['impuestos']['items'].append({'fecha': '-', 'detalle': 'IVA Neto a Pagar Estimado (13% - Crédito)', 'monto': iva_a_pagar_mgr})
-
-        it_virtual = mgr_data['ingresos']['total'] * 0.03
-        mgr_data['impuestos']['total'] += it_virtual
-        mgr_data['impuestos']['items'].append({'fecha': '-', 'detalle': 'IT Generado por Ventas (3%)', 'monto': it_virtual})
-
+        # Taxes: REMOVED Accruals (IVA Neto / IT Calculated) to use CASH BASIS (Actual Payments)
+        # iva_a_pagar_mgr = max(0, breakdown['iva_df'] - breakdown['iva_cf'])
+        # it_virtual = mgr_data['ingresos']['total'] * 0.03
+        
         mgr_data['kpis']['margen_bruto'] = mgr_data['ingresos']['total'] - mgr_data['costos_ventas']['total']
         mgr_data['kpis']['bait'] = mgr_data['kpis']['margen_bruto'] - mgr_data['gastos_personal']['total'] - mgr_data['gastos_fijos']['total'] - mgr_data['depreciacion']['total']
         mgr_data['kpis']['utilidad_antes_iue'] = (mgr_data['kpis']['bait'] - mgr_data['gastos_financieros']['total'] - mgr_data['impuestos']['total'])

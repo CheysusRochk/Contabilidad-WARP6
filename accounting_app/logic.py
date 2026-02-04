@@ -113,7 +113,7 @@ def calculate_taxes(monto: float, tipo: str, tiene_factura: bool, categoria: str
         }
     
     # Detectar variantes: "pago impuestos", "pago de impuestos", etc.
-    if ("pago" in cat_lower and "impuesto" in cat_lower):
+    if ("pago" in cat_lower and ("impuesto" in cat_lower or "tributo" in cat_lower or "iva" in cat_lower or "it" in cat_lower)):
         return {
             'monto_total': monto,
             'iva_df': 0.0, 'it': 0.0, 'ingreso_neto': 0.0,
