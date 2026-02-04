@@ -404,24 +404,43 @@ def calculate_balance_sheet(df, assets_df, cutoff_date=None):
     total_aportes = df[is_aporte]['monto'].sum()
     aportes_efectivo = df[is_aporte_efectivo]['monto'].sum()
     
-    # ========== 1. CÁLCULO DE CAJA (Solo transacciones fiscales) ==========
+    # ========== 1. CÁLCULO DE PAGOS DE IMPUESTOS (Para ajustar Caja y Pasivos) ==========
+    pagos_impuestos = df[df['tipo'] == 'Gasto']
+    iva_pagado_acum = 0
+    it_pagado_acum = 0
+    retenciones_pagado_acum = 0
+    
+    for _, row in pagos_impuestos.iterrows():
+        det = str(row['detalle']).lower()
+        cat = str(row['categoria']).lower()
+        monto = row['monto']
+        
+        # Considerar pago si la categoría o detalle lo indica explícitamente
+        if 'impuesto' in cat or 'tributo' in cat or 'pago' in det:
+            if 'iva' in det or '200' in det:
+                iva_pagado_acum += monto
+            elif 'it' in det or '400' in det:
+                it_pagado_acum += monto
+            elif 'retencion' in det or 'iue' in det and '410' in det: 
+                retenciones_pagado_acum += monto
+
+    # ========== 2. CÁLCULO DE CAJA FISCAL ==========
     # Ingresos brutos facturados
     ingresos_brutos = ingresos_facturados['monto'].sum()
     
-    # Gastos brutos (Lo que sale de caja)
-    # Para facturas: sale 100%. Para retenciones: sale 100% (NETO). 
-    # El Balance Fiscal registra lo que es legalmente soportado.
+    # Gastos brutos (Lo que sale de caja con factura/retención)
     gastos_caja_fiscal = gastos_deducibles['monto'].sum()
     
-    # Caja Fiscal = SOLO Aportes en Efectivo + Ingresos - Gastos
-    caja_final = aportes_efectivo + ingresos_brutos - gastos_caja_fiscal
+    # Caja Fiscal = Aportes Efectivo + Ingresos - Gastos Operativos - PAGOS IMPUESTOS
+    total_pagos_impuestos = iva_pagado_acum + it_pagado_acum + retenciones_pagado_acum
+    caja_final = aportes_efectivo + ingresos_brutos - gastos_caja_fiscal - total_pagos_impuestos
     
-    # ========== 2. ACTIVOS FIJOS ==========
+    # ========== 3. ACTIVOS FIJOS ==========
     valor_activos = assets_df['valor_inicial'].sum() if not assets_df.empty else 0
     dep_acumulada = calculate_period_depreciation(assets_df, 12)
     activos_netos = valor_activos - dep_acumulada
     
-    # ========== 3. IMPUESTOS (PASIVOS) ==========
+    # ========== 4. IMPUESTOS (PASIVOS) ==========
     iva_df_total = 0
     iva_cf_total = 0
     it_total = 0
@@ -454,26 +473,7 @@ def calculate_balance_sheet(df, assets_df, cutoff_date=None):
         if 'retenciones' in taxes:
             retenciones_liability_total += taxes['retenciones']['total']
     
-    # Pasivos Tributarios (Ajustado por Pagos)
-    pagos_impuestos = df[df['tipo'] == 'Gasto']
-    iva_pagado_acum = 0
-    it_pagado_acum = 0
-    retenciones_pagado_acum = 0
-    
-    for _, row in pagos_impuestos.iterrows():
-        det = str(row['detalle']).lower()
-        cat = str(row['categoria']).lower()
-        monto = row['monto']
-        
-        # Considerar pago si la categoría o detalle lo indica explícitamente
-        if 'impuesto' in cat or 'tributo' in cat or 'pago' in det:
-            if 'iva' in det or '200' in det:
-                iva_pagado_acum += monto
-            elif 'it' in det or '400' in det:
-                it_pagado_acum += monto
-            elif 'retencion' in det or 'iue' in det and '410' in det: # Basic keyword match
-                retenciones_pagado_acum += monto
-
+    # Pasivos Tributarios (Ajustado por Pagos ya calculados arriba)
     iva_por_pagar = max(0, iva_df_total - iva_cf_total - iva_pagado_acum)
     iva_credito_fiscal = max(0, iva_cf_total - iva_df_total)
     it_por_pagar = max(0, it_total - it_pagado_acum)
