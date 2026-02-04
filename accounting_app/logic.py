@@ -474,13 +474,53 @@ def calculate_balance_sheet(df, assets_df, cutoff_date=None):
             retenciones_liability_total += taxes['retenciones']['total']
     
     # Pasivos Tributarios (Ajustado por Pagos ya calculados arriba)
-    iva_por_pagar = max(0, iva_df_total - iva_cf_total - iva_pagado_acum)
-    iva_credito_fiscal = max(0, iva_cf_total - iva_df_total)
-    it_por_pagar = max(0, it_total - it_pagado_acum)
-    # Retenciones Por Pagar
-    retenciones_por_pagar = max(0, retenciones_liability_total - retenciones_pagado_acum)
+    # Pasivos Tributarios (Ajustado por Pagos ya calculados arriba)
+    # IVA
+    # 1. Determinar deuda neta antes de pagos
+    deuda_iva_teorica = iva_df_total - iva_cf_total 
     
-    # ========== 4. ESTADO DE RESULTADOS FISCAL (Para Patrimonio) ==========
+    if deuda_iva_teorica > 0:
+        # Toca pagar. Vemos si pagamos suficiente.
+        saldo_iva = deuda_iva_teorica - iva_pagado_acum
+        if saldo_iva > 0:
+            iva_por_pagar = saldo_iva
+            iva_saldo_favor = 0
+            iva_credito_fiscal_real = 0 # No hay CF, se consumió todo
+        else:
+            iva_por_pagar = 0
+            iva_saldo_favor = abs(saldo_iva) # Pagamos de más
+            iva_credito_fiscal_real = 0
+    else:
+        # Tenemos crédito fiscal (CF > DF)
+        iva_por_pagar = 0
+        iva_credito_fiscal_real = abs(deuda_iva_teorica)
+        iva_saldo_favor = iva_pagado_acum # Todo lo pagado es saldo a favor porque no debíamos nada
+        
+    # TOTAL ACTIVO IVA (CF + Pagos en Exceso)
+    activos_impuestos_iva = iva_credito_fiscal_real + iva_saldo_favor
+
+    # IT
+    saldo_it = it_total - it_pagado_acum
+    if saldo_it > 0:
+        it_por_pagar = saldo_it
+        it_saldo_favor = 0
+    else:
+        it_por_pagar = 0
+        it_saldo_favor = abs(saldo_it)
+        
+    # Retenciones
+    saldo_ret = retenciones_liability_total - retenciones_pagado_acum
+    if saldo_ret > 0:
+        retenciones_por_pagar = saldo_ret
+        ret_saldo_favor = 0
+    else:
+        retenciones_por_pagar = 0
+        ret_saldo_favor = abs(saldo_ret)
+
+    # Activos por Impuestos Totales
+    total_activos_impuestos = activos_impuestos_iva + it_saldo_favor + ret_saldo_favor
+
+    # Utilidad Neta Fiscal (Se mantiene igual, no depende de pagos)
     # Ingresos Netos = Ingresos Brutos - IVA DF
     ingresos_netos_fiscales = ingresos_brutos - iva_df_total
     
@@ -503,9 +543,9 @@ def calculate_balance_sheet(df, assets_df, cutoff_date=None):
         'activos': {
             'corriente': {
                 'caja': caja_final,
-                'iva_credito': iva_credito_fiscal,
+                'iva_credito': total_activos_impuestos, # Incluye CF y Anticipos
                 'inventarios': 0, 
-                'total': caja_final + iva_credito_fiscal
+                'total': caja_final + total_activos_impuestos
             },
             'no_corriente': {
                 'fijos_bruto': valor_activos,
