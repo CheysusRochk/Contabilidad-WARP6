@@ -912,10 +912,15 @@ def show_importador():
             st.subheader("Vista Previa")
             st.dataframe(df_preview.head())
             
+            replace_existing = st.checkbox("⚠️ Reemplazar transacciones existentes (Mantiene los Activos Fijos intactos)", value=True)
+
             if st.button("Confirmar e Importar a Base de Datos"):
                 count = 0
                 progress_bar = st.progress(0)
                 
+                if replace_existing:
+                    db.clear_all_transactions()
+                    
                 for idx, row in df_preview.iterrows():
                     db.add_transaction(
                         row['fecha'],

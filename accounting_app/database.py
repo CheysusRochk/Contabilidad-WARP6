@@ -52,6 +52,15 @@ def init_db():
     conn.commit()
     conn.close()
 
+def clear_all_transactions():
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("DELETE FROM transactions")
+    # Reset auto-increment for transactions if needed
+    c.execute("DELETE FROM sqlite_sequence WHERE name='transactions'")
+    conn.commit()
+    conn.close()
+
 def add_transaction(fecha, tipo, categoria, detalle, n_factura, nit, monto, metodo_pago, tiene_factura, aplica_retencion=False):
     conn = get_connection()
     c = conn.cursor()
