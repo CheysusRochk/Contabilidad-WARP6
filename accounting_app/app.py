@@ -80,47 +80,132 @@ def show_dashboard():
     ingresos = ingresos_totales_raw[~is_aporte] # Solo ventas reales
     aportes_capital = ingresos_totales_raw[is_aporte]
 
-    # --- KPIs Principales ---
+    # --- Cálculos Base para KPIs ---
     total_ventas = ingresos['monto'].sum()
     total_aportes = aportes_capital['monto'].sum()
     total_gastos = gastos['monto'].sum()
     
     # Calculo de Crédito Fiscal Perdido (SQLite guarda booleanos como 0/1)
     gastos_sin_factura = gastos[gastos['tiene_factura'] == 0]
-    gastos_no_deducibles = gastos_sin_factura['monto'].sum() # Simple approach, improved later
+    gastos_no_deducibles = gastos_sin_factura['monto'].sum()
     cf_perdido = gastos_sin_factura['monto'].sum() * 0.13
     
+    # Cálculos Tributarios Directos
+    iva_df_total = total_ventas * logic.IVA_RATE
+    
+    # IT Pagado real (buscando transacciones de pago)
+    it_pagado_total = 0
+    for _, row in gastos.iterrows():
+        det = str(row['detalle']).lower()
+        cat = str(row['categoria']).lower()
+        if ('pago' in det or 'impuesto' in cat or 'tributo' in cat) and ('it' in det or '400' in det):
+            it_pagado_total += row['monto']
+
+    # --- Layout del Dashboard ---
+    
+    # Fila 1: KPIs Principales (Operativos y Fiscales)
+    st.markdown("### 💰 Resumen Operativo y Fiscal")
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Ventas Operativas", f"Bs {total_ventas:,.2f}", delta=f"Aportes: {total_aportes:,.2f}" if total_aportes > 0 else None)
-    col2.metric("Gastos Totales", f"Bs {total_gastos:,.2f}")
-    col3.metric("Gastos NO Deducibles", f"Bs {gastos_no_deducibles:,.2f}", delta="Aumenta tu IUE", delta_color="inverse")
-    col4.metric("Crédito Fiscal Perdido", f"Bs {cf_perdido:,.2f}", delta="Dinero perdido", delta_color="inverse")
+    
+    with col1:
+        st.metric("📈 Ventas Operativas Totales", f"Bs {total_ventas:,.2f}", 
+                  delta=f"+ Bs {total_aportes:,.2f} en Aportes" if total_aportes > 0 else None, 
+                  help="Total de ingresos por ventas y servicios (sin contar aportes directos a capital)")
+    
+    with col2:
+        st.metric("📉 Compras y Gastos Totales", f"Bs {total_gastos:,.2f}", 
+                  delta=f"{len(gastos)} transacciones", 
+                  delta_color="off", help="Incluye todos los gastos operativos, compras e impuestos pagados")
+                  
+    with col3:
+        st.metric("🏛️ Débito Fiscal Generado (IVA 13%)", f"Bs {iva_df_total:,.2f}", 
+                  help="El 13% del total de las ventas. Es el IVA que se le debe al fisco antes de descontar compras.")
+                  
+    with col4:
+        st.metric("💸 Total IT Pagado Real", f"Bs {it_pagado_total:,.2f}", 
+                  help="La suma total de todos los pagos de Impuesto a las Transacciones (Form. 400) registrados")
 
     st.markdown("---")
 
-    # --- Charts ---
-    c1, c2 = st.columns(2)
+    # Fila 2: Alertas y Eficiencia
+    st.markdown("### ⚠️ Eficiencia y Pérdidas Fiscales")
+    c_alert1, c_alert2 = st.columns(2)
     
-    with c1:
-        st.subheader("Distribución de Gastos por Categoría")
+    with c_alert1:
+        st.metric("🛑 Gastos SIN Factura (No Deducibles)", f"Bs {gastos_no_deducibles:,.2f}", 
+                  delta="Esto aumentará tu IUE anual (25%)", delta_color="inverse", 
+                  help="Dinero gastado que no sirve para reducir impuestos")
+    
+    with c_alert2:
+        st.metric("💸 Dinero Perdido (Crédito Fiscal 13%)", f"Bs {cf_perdido:,.2f}", 
+                  delta="Dinero regalado por no exigir factura", delta_color="inverse", 
+                  help="Es el 13% de los gastos sin factura. Es IVA que perdiste a favor del Estado.")
+
+    st.markdown("---")
+
+    # Fila 3: Gráficos
+    st.markdown("### 📊 Análisis Gráfico")
+    cg1, cg2 = st.columns(2)
+    
+    with cg1:
+        st.markdown("**Top Categorías de Gasto**")
         if not gastos.empty:
-            gastos_cat = gastos.groupby('categoria')['monto'].sum().sort_values(ascending=False)
-            st.bar_chart(gastos_cat)
+            gastos_cat = gastos.groupby('categoria')['monto'].sum().sort_values(ascending=True) # Ascending para barra horizontal
+            st.bar_chart(gastos_cat, horizontal=True)
         else:
             st.info("Sin gastos registrados")
 
-    with c2:
-        st.subheader("Eficiencia Fiscal (Facturas)")
-        if not gastos.empty:
-            fact_counts = gastos['tiene_factura'].value_counts()
-            fact_counts.index = ["Con Factura" if x else "Sin Factura" for x in fact_counts.index]
-            st.write("Cantidad de Transacciones")
-            st.bar_chart(fact_counts)
-            
-            # Advice
-            pct_sf = (len(gastos_sin_factura) / len(gastos)) * 100
-            if pct_sf > 20:
-                st.warning(f"⚠️ El {pct_sf:.1f}% de tus gastos son sin factura. Esto incrementará tu IUE anual.")
+    with cg2:
+        st.markdown("**Ingresos vs Gastos en el Tiempo**")
+        # Preparar data para series de tiempo
+        if not df.empty:
+            df['fecha'] = pd.to_datetime(df['fecha'])
+            # Agrupar por mes y tipo
+            df_time = df.groupby([df['fecha'].dt.to_period('M'), 'tipo'])['monto'].sum().unstack().fillna(0)
+            df_time.index = df_time.index.astype(str) # Convertir periodo a texto
+            st.line_chart(df_time)
+        else:
+             st.info("Sin datos para graficar")
+
+    st.markdown("---")
+    
+    # Fila 4: Calendario Fiscal (Extraído de Reportes)
+    st.markdown("### 📅 Calendario Fiscal Mensual (Visor Rápido)")
+    st.markdown("*Desglose mes a mes de impuestos generados y los pagos efectivamente realizados*")
+    
+    tax_summary = logic.get_monthly_tax_summary(df)
+        
+    if not tax_summary:
+        st.info("No hay datos suficientes para generar el calendario fiscal.")
+    else:
+        monthly_data = []
+        for mes, vals in tax_summary.items():
+            monthly_data.append({
+                'Mes': mes,
+                'IVA Adeudado': vals['iva_determinado'],
+                'IVA Pagado': vals['iva_pagado'],
+                'IT Adeudado': vals['it_determinado'],
+                'IT Pagado': vals['it_pagado'],
+                'Total Adeudado': vals['total_determinado'],
+                'Total Pagado': vals['total_pagado'],
+                'Diferencia (Deuda Restante)': vals['total_determinado'] - vals['total_pagado']
+            })
+        
+        df_monthly = pd.DataFrame(monthly_data)
+        
+        # Format para mostrar visualmente agradable
+        df_display = df_monthly.copy()
+        for col in df_display.columns:
+            if col != 'Mes':
+                df_display[col] = df_display[col].apply(lambda x: f"Bs {x:,.2f}")
+        
+        st.dataframe(df_display, use_container_width=True, hide_index=True)
+        
+        # Alertas críticas del mes
+        deudores = df_monthly[df_monthly['Diferencia (Deuda Restante)'] > 100]
+        if not deudores.empty:
+             mes_peor = deudores.sort_values('Diferencia (Deuda Restante)', ascending=False).iloc[0]
+             st.error(f"🚨 **Alerta Fiscal**: Tienes una deuda importante de Bs {mes_peor['Diferencia (Deuda Restante)']:,.2f} en **{mes_peor['Mes']}** que falta por pagar regularizar del IVA/IT.")
 
 def show_registro():
     st.title("📝 Registro de Transacciones")
@@ -206,22 +291,29 @@ def show_reportes():
         max_date = df['fecha_dt'].max().date()
         min_date = df['fecha_dt'].min().date()
         
-        cutoff_date = st.date_input(
-            "Generar reportes hasta:",
-            value=max_date,
+        date_range = st.date_input(
+            "Rango de Fechas para Reportes:",
+            value=(min_date, max_date),
             min_value=min_date,
             max_value=date.today(),
-            help="Selecciona la fecha de corte. Solo se incluirán transacciones hasta esta fecha."
+            help="Selecciona la fecha de inicio y fin para los reportes. Deja ambos campos iguales para un solo día."
         )
     
     with col_info:
-        st.info(f"📊 Generando reportes **al {cutoff_date.strftime('%d/%m/%Y')}**")
-        
-    # Filter transactions by cutoff date
-    df = df[df['fecha_dt'] <= pd.to_datetime(cutoff_date)]
+        if len(date_range) == 2:
+            start_date, end_date = date_range
+            st.info(f"📊 Generando reportes **del {start_date.strftime('%d/%m/%Y')} al {end_date.strftime('%d/%m/%Y')}**")
+        else:
+            # If user hasn't selected the second date yet, use the first one for both
+            start_date = date_range[0]
+            end_date = date_range[0]
+            st.info(f"📊 Seleccionando fecha de fin...")
+            
+    # Filter transactions by date range
+    df = df[(df['fecha_dt'] >= pd.to_datetime(start_date)) & (df['fecha_dt'] <= pd.to_datetime(end_date))]
     
     if df.empty:
-        st.warning(f"No hay transacciones hasta la fecha {cutoff_date}")
+        st.warning(f"No hay transacciones en el rango de fechas seleccionado.")
         return
     
     st.markdown("---")
@@ -536,14 +628,15 @@ def show_reportes():
         pdf_mgr_detailed = reports.generate_pdf_managerial_detailed(mgr_data, "Acumulado Anual")
         
         # D. Balance Sheets
-        balance_data = logic.calculate_balance_sheet(df, assets_df, cutoff_date)
-        balance_real_data = logic.calculate_balance_sheet_real(df, assets_df, cutoff_date)
+        balance_data = logic.calculate_balance_sheet(df, assets_df, date_range)
+        balance_real_data = logic.calculate_balance_sheet_real(df, assets_df, date_range)
         
-        pdf_balance_sin = reports.generate_pdf_balance_sin(balance_data, f"Al {cutoff_date.strftime('%d/%m/%Y')}")
-        pdf_balance_real = reports.generate_pdf_balance_real(balance_real_data, f"Al {cutoff_date.strftime('%d/%m/%Y')}")
+        date_str = f"Del {start_date.strftime('%d/%m/%Y')} al {end_date.strftime('%d/%m/%Y')}"
+        pdf_balance_sin = reports.generate_pdf_balance_sin(balance_data, date_str)
+        pdf_balance_real = reports.generate_pdf_balance_real(balance_real_data, date_str)
         
         # E. Gerencial Completo
-        pdf_gerencial_completo = reports.generate_pdf_gerencial_completo(balance_data, mgr_data, f"Gestión 2025 (Al {cutoff_date})")
+        pdf_gerencial_completo = reports.generate_pdf_gerencial_completo(balance_data, mgr_data, date_str)
         
         # F. Excel RCV
         excel_rcv = reports.generate_excel_rcv(df)
@@ -582,7 +675,7 @@ def show_reportes():
             st.download_button(
                 label="🏛️ Balance General Legal (SIN)",
                 data=pdf_balance_sin,
-                file_name=f"Balance_General_SIN_{cutoff_date.strftime('%Y%m%d')}.pdf",
+                file_name=f"Balance_General_SIN_{end_date.strftime('%Y%m%d')}.pdf",
                 mime="application/pdf",
                 help="Solo transacciones facturadas",
                 key="btn_balance_sin"
@@ -606,7 +699,7 @@ def show_reportes():
             st.download_button(
                 label="💰 Balance General Gerencial (Real)",
                 data=pdf_balance_real,
-                file_name=f"Balance_General_Real_{cutoff_date.strftime('%Y%m%d')}.pdf",
+                file_name=f"Balance_General_Real_{end_date.strftime('%Y%m%d')}.pdf",
                 mime="application/pdf",
                 help="Refleja caja real y gastos no deducibles",
                 key="btn_balance_real"
@@ -616,7 +709,7 @@ def show_reportes():
             st.download_button(
                 label="📈 Informe Gerencial Completo",
                 data=pdf_gerencial_completo,
-                file_name=f"Informe_Gerencial_{cutoff_date.strftime('%Y%m%d')}.pdf",
+                file_name=f"Informe_Gerencial_{end_date.strftime('%Y%m%d')}.pdf",
                 mime="application/pdf",
                 help="Informe estratégico de 5 páginas",
                 key="btn_informe_gerencial_completo"

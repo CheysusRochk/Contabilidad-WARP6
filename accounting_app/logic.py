@@ -364,21 +364,26 @@ def calculate_period_depreciation(assets_df, months=12):
     
     return total_dep
 
-def calculate_balance_sheet(df, assets_df, cutoff_date=None):
+def calculate_balance_sheet(df, assets_df, date_range=None):
     """
     Calcula Balance General para el SIN (Solo Operaciones Facturadas).
     Este balance refleja la REALIDAD FISCAL, no la realidad de caja.
     Activo = Pasivo + Patrimonio
     """
-    if cutoff_date:
+    if date_range is not None:
+        if len(date_range) == 2:
+            start_date, end_date = date_range
+        else:
+            start_date, end_date = date_range[0], date_range[0]
+            
         # Convertir a datetime para filtrar
         if not pd.api.types.is_datetime64_any_dtype(df['fecha']):
              df['fecha_dt'] = pd.to_datetime(df['fecha'])
         else:
              df['fecha_dt'] = df['fecha']
         
-        # Filtro hasta la fecha de corte
-        df = df[df['fecha_dt'] <= pd.to_datetime(cutoff_date)]
+        # Filtro por rango de fechas
+        df = df[(df['fecha_dt'] >= pd.to_datetime(start_date)) & (df['fecha_dt'] <= pd.to_datetime(end_date))]
     
     # ========== FILTRAR SOLO TRANSACCIONES FACTURADAS (PARA SIN) ==========
     # Identificar Aportes de Capital (siempre van, no necesitan factura)
@@ -585,18 +590,24 @@ def calculate_balance_sheet(df, assets_df, cutoff_date=None):
     
     return balance
 
-def calculate_balance_sheet_real(df, assets_df, cutoff_date=None):
+def calculate_balance_sheet_real(df, assets_df, date_range=None):
     """
     Calcula Balance General REAL (Gerencial).
     Muestra la realidad de caja incluyendo TODOS los gastos (con y sin factura),
     pero mantiene la Utilidad Fiscal para efectos tributarios.
     """
-    if cutoff_date:
+    if date_range is not None:
+        if len(date_range) == 2:
+            start_date, end_date = date_range
+        else:
+            start_date, end_date = date_range[0], date_range[0]
+            
         if not pd.api.types.is_datetime64_any_dtype(df['fecha']):
              df['fecha_dt'] = pd.to_datetime(df['fecha'])
         else:
              df['fecha_dt'] = df['fecha']
-        df = df[df['fecha_dt'] <= pd.to_datetime(cutoff_date)]
+        
+        df = df[(df['fecha_dt'] >= pd.to_datetime(start_date)) & (df['fecha_dt'] <= pd.to_datetime(end_date))]
     
     # Identificar Aportes
     is_aporte = df['categoria'].str.lower().str.contains('aporte', na=False) & \
