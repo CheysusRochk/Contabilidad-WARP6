@@ -295,7 +295,7 @@ def show_reportes():
             "Rango de Fechas para Reportes:",
             value=(min_date, max_date),
             min_value=min_date,
-            max_value=date.today(),
+            max_value=max(max_date, date.today()),
             help="Selecciona la fecha de inicio y fin para los reportes. Deja ambos campos iguales para un solo día."
         )
     
@@ -927,7 +927,7 @@ def show_activos():
                 with c2:
                     if st.button("🗑️ Eliminar", key=f"del_{row['id']}"):
                         db.delete_asset(row['id'])
-                        st.experimental_rerun()
+                        st.rerun()
             
             st.divider()
             
@@ -977,6 +977,27 @@ def show_importador():
     > * Si usas **"Aporte de Capital"**, el sistema NO calculará impuestos (IVA/IT).
     > * Si usas **"Pago de Impuestos"**, no buscará crédito fiscal.
     """)
+    
+    # --- BOTÓN DE LIMPIAR BASE DE DATOS ---
+    st.markdown("---")
+    st.markdown("### 🗑️ Limpiar Base de Datos de Transacciones")
+    st.caption("Usa este botón si quieres borrar todas las transacciones antes de importar una plantilla actualizada. **Los Activos Fijos NO se borran.**")
+    
+    col_clear1, col_clear2 = st.columns([1, 2])
+    with col_clear1:
+        # Checkbox de confirmación para evitar borrado accidental
+        confirmar_borrado = st.checkbox("✅ Confirmo que quiero borrar todas las transacciones", key="confirm_clear_db")
+    
+    with col_clear2:
+        if confirmar_borrado:
+            if st.button("🗑️ Borrar Todas las Transacciones", type="primary", key="btn_clear_db"):
+                db.clear_all_transactions()
+                st.success("✅ ¡Base de datos de transacciones limpiada! Los Activos Fijos se mantienen intactos. Ahora puedes importar tu plantilla actualizada.")
+                st.balloons()
+        else:
+            st.button("🗑️ Borrar Todas las Transacciones", disabled=True, key="btn_clear_db_disabled", help="Marca la casilla de confirmación primero")
+    
+    st.markdown("---")
     
     # 1. Download Template
     template_data = importer.generate_template()
