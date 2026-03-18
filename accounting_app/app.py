@@ -5,6 +5,7 @@ import database as db
 import logic
 import reports
 import importer
+import time
 
 # Configuración de página
 st.set_page_config(
@@ -39,7 +40,44 @@ st.markdown("""
 # Inicializar Base de Datos
 db.init_db()
 
+def check_password():
+    timeout_minutes = 15 # 15 minutos de inactividad
+
+    if "authenticated" not in st.session_state:
+        st.session_state["authenticated"] = False
+        st.session_state["last_action_time"] = 0
+
+    if st.session_state["authenticated"]:
+        if time.time() - st.session_state["last_action_time"] > timeout_minutes * 60:
+            st.session_state["authenticated"] = False
+            st.error("⚠️ Sesión expirada por inactividad. Por favor, inicia sesión de nuevo.")
+        else:
+            st.session_state["last_action_time"] = time.time()
+            return True
+
+    st.markdown("<br><br><br>", unsafe_allow_html=True)
+    col1, col2, col3 = st.columns([1,2,1])
+    with col2:
+        st.markdown("<h2 style='text-align: center;'>🔒 Acceso Seguro - WARP6</h2>", unsafe_allow_html=True)
+        st.markdown("<p style='text-align: center;'>Por favor ingresa la contraseña de administrador para continuar.</p>", unsafe_allow_html=True)
+        pwd = st.text_input("Contraseña", type="password", label_visibility="collapsed", placeholder="Contraseña de Administrador")
+        if st.button("Iniciar Sesión"):
+            if pwd == "WARP6SOL":
+                st.session_state["authenticated"] = True
+                st.session_state["last_action_time"] = time.time()
+                try:
+                    st.rerun()
+                except AttributeError:
+                    st.experimental_rerun()
+            else:
+                st.error("❌ Contraseña incorrecta.")
+            
+    return False
+
 def main():
+    if not check_password():
+        return
+
     st.sidebar.title("WARP6 Solutions S.R.L.")
     st.sidebar.markdown("---")
     menu = st.sidebar.radio("Navegación", ["Dashboard", "Registro", "Reportes", "Activos Fijos", "Importar Data"])
