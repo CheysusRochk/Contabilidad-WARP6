@@ -356,6 +356,19 @@ def show_reportes():
     
     st.markdown("---")
 
+    # --- UFV Y AITB ---
+    st.markdown("### 📈 Ajuste por Inflación (AITB)")
+    st.info("Ingresa las UFVs para calcular el Ajuste por Inflación y Tenencia de Bienes de los Activos Fijos y Patrimonio.")
+    col_u1, col_u2 = st.columns(2)
+    with col_u1:
+        ufv_inicial = st.number_input("UFV Inicial (Ej. 1 de Enero)", min_value=1.0, value=2.50000, step=0.00001, format="%.5f")
+    with col_u2:
+        ufv_final = st.number_input("UFV Final (Fecha de Cierre)", min_value=1.0, value=2.50000, step=0.00001, format="%.5f")
+        
+    ufv_ratio = ufv_final / ufv_inicial if ufv_inicial > 0 else 1.0
+
+    st.markdown("---")
+
     # --- PESTAÑAS DE REPORTES ---
     tab1, tab2 = st.tabs(["Resumen Financiero", "Detalle de Transacciones"])
 
@@ -427,7 +440,7 @@ def show_reportes():
 
         # Calcular Depreciación para el periodo (Anual por defecto)
         assets_df = db.get_assets()
-        depreciacion_periodo = logic.calculate_period_depreciation(assets_df, 12)
+        depreciacion_periodo = logic.calculate_period_depreciation(assets_df, 12, ufv_ratio)
 
         resultado_operativo = breakdown['net_income'] - breakdown['gastos_netos'] - breakdown['it_total'] - depreciacion_periodo
 
@@ -486,7 +499,7 @@ def show_reportes():
                 leg_breakdown['total_gastos'] += row['monto']
             
         assets_df = db.get_assets()
-        monthly_dep = logic.calculate_period_depreciation(assets_df, 12)
+        monthly_dep = logic.calculate_period_depreciation(assets_df, 12, ufv_ratio)
         leg_resultado = leg_breakdown['net_income'] - leg_breakdown['gastos_netos'] - leg_breakdown['it_total'] - monthly_dep
         
         pdf_er_legal_simple = reports.generate_pdf_financials(leg_ingresos, leg_breakdown['total_gastos'], leg_resultado, leg_breakdown, depreciation=monthly_dep)
@@ -500,12 +513,15 @@ def show_reportes():
             'gastos_financieros': {'total': 0, 'items': []},
             'impuestos': {'total': 0, 'items': []},
             'depreciacion': {'total': monthly_dep, 'items': []},
+            'otros_ingresos': {'total': 0, 'items': []},
+            'otros_gastos': {'total': 0, 'items': []},
             'kpis': {}
         }
         
         dep_items = []
         for _, asset in assets_df.iterrows():
-             annual_dep = asset['valor_inicial'] / asset['vida_util_anios']
+             valor_actualizado = asset['valor_inicial'] * ufv_ratio
+             annual_dep = valor_actualizado / asset['vida_util_anios']
              dep_items.append({'fecha': str(asset['fecha_adquisicion']), 'detalle': f"Depreciación: {asset['nombre']}", 'monto': annual_dep})
         legal_detailed_data['depreciacion']['items'] = dep_items
 
@@ -590,9 +606,33 @@ def show_reportes():
         
         legal_detailed_data['kpis']['margen_bruto'] = ingresos_netos_legal - deducible_costos
         legal_detailed_data['kpis']['bait'] = (legal_detailed_data['kpis']['margen_bruto'] - deducible_personal - deducible_fijos - monthly_dep)
-        legal_detailed_data['kpis']['utilidad_antes_iue'] = (legal_detailed_data['kpis']['bait'] - deducible_financieros - deducible_impuestos)
+        
+        # AITB Calculation
+        valor_activos_historico = assets_df['valor_inicial'].sum() if not assets_df.empty else 0
+        aitb_activos = valor_activos_historico * (ufv_ratio - 1)
+        is_aporte_local = df['categoria'].str.lower().str.contains('aporte', na=False) & \
+                    df['categoria'].str.lower().str.contains('capital', na=False)
+        total_aportes_historico = df[is_aporte_local]['monto'].sum()
+        aitb_capital = total_aportes_historico * (ufv_ratio - 1)
+        aitb_neto = aitb_activos - aitb_capital
+        
+        if aitb_neto > 0:
+            legal_detailed_data['otros_ingresos']['total'] += aitb_neto
+            legal_detailed_data['otros_ingresos']['items'].append({'fecha': '-', 'detalle': 'Ajuste por Inflación y Tenencia de Bienes (AITB)', 'monto': aitb_neto})
+        elif aitb_neto < 0:
+            legal_detailed_data['otros_gastos']['total'] += abs(aitb_neto)
+            legal_detailed_data['otros_gastos']['items'].append({'fecha': '-', 'detalle': 'Ajuste por Inflación y Tenencia de Bienes (AITB)', 'monto': abs(aitb_neto)})
+            
+        uai = (legal_detailed_data['kpis']['bait'] - deducible_financieros - deducible_impuestos) + aitb_neto
+        legal_detailed_data['kpis']['utilidad_antes_iue'] = uai
         legal_detailed_data['kpis']['iue'] = max(0, legal_detailed_data['kpis']['utilidad_antes_iue'] * 0.25)
         legal_detailed_data['kpis']['utilidad_neta'] = legal_detailed_data['kpis']['utilidad_antes_iue'] - legal_detailed_data['kpis']['iue']
+        
+        if legal_detailed_data['kpis']['utilidad_neta'] > 0:
+            legal_detailed_data['kpis']['reserva_legal'] = legal_detailed_data['kpis']['utilidad_neta'] * 0.05
+        else:
+            legal_detailed_data['kpis']['reserva_legal'] = 0.0
+        legal_detailed_data['kpis']['utilidad_liquida'] = legal_detailed_data['kpis']['utilidad_neta'] - legal_detailed_data['kpis']['reserva_legal']
         
         pdf_er_legal_detailed = reports.generate_pdf_legal_detailed(legal_detailed_data, "Acumulado Anual")
 
@@ -663,11 +703,17 @@ def show_reportes():
         mgr_data['kpis']['iue'] = legal_detailed_data['kpis']['iue']
         mgr_data['kpis']['utilidad_neta'] = mgr_data['kpis']['utilidad_antes_iue'] - mgr_data['kpis']['iue']
         
+        if mgr_data['kpis']['utilidad_neta'] > 0:
+            mgr_data['kpis']['reserva_legal'] = mgr_data['kpis']['utilidad_neta'] * 0.05
+        else:
+            mgr_data['kpis']['reserva_legal'] = 0.0
+        mgr_data['kpis']['utilidad_liquida'] = mgr_data['kpis']['utilidad_neta'] - mgr_data['kpis']['reserva_legal']
+        
         pdf_mgr_detailed = reports.generate_pdf_managerial_detailed(mgr_data, "Acumulado Anual")
         
         # D. Balance Sheets
-        balance_data = logic.calculate_balance_sheet(df, assets_df, date_range)
-        balance_real_data = logic.calculate_balance_sheet_real(df, assets_df, date_range)
+        balance_data = logic.calculate_balance_sheet(df, assets_df, date_range, ufv_ratio)
+        balance_real_data = logic.calculate_balance_sheet_real(df, assets_df, date_range, ufv_ratio)
         
         date_str = f"Del {start_date.strftime('%d/%m/%Y')} al {end_date.strftime('%d/%m/%Y')}"
         pdf_balance_sin = reports.generate_pdf_balance_sin(balance_data, date_str)

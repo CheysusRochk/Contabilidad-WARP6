@@ -326,7 +326,7 @@ def get_monthly_tax_summary(df):
     return resumen
 
 
-def calculate_period_depreciation(assets_df, months=12):
+def calculate_period_depreciation(assets_df, months=12, ufv_ratio=1.0):
     """
     Calcula depreciación ACUMULADA desde la adquisición hasta ahora.
     Usa método de línea recta mensual.
@@ -340,8 +340,9 @@ def calculate_period_depreciation(assets_df, months=12):
     
     for _, row in assets_df.iterrows():
         try:
-            # Calcular depreciación mensual
-            annual_dep = row['valor_inicial'] / row['vida_util_anios']
+            # Calcular depreciación mensual ajustada
+            valor_actualizado = row['valor_inicial'] * ufv_ratio
+            annual_dep = valor_actualizado / row['vida_util_anios']
             monthly_dep = annual_dep / 12
             
             # Calcular meses transcurridos desde adquisición
@@ -359,12 +360,13 @@ def calculate_period_depreciation(assets_df, months=12):
             
         except Exception as e:
             # Si hay error en algún activo, usar depreciación anual simple
-            annual_dep = row['valor_inicial'] / row['vida_util_anios']
+            valor_actualizado = row['valor_inicial'] * ufv_ratio
+            annual_dep = valor_actualizado / row['vida_util_anios']
             total_dep += annual_dep
     
     return total_dep
 
-def calculate_balance_sheet(df, assets_df, date_range=None):
+def calculate_balance_sheet(df, assets_df, date_range=None, ufv_ratio=1.0):
     """
     Calcula Balance General para el SIN (Solo Operaciones Facturadas).
     Este balance refleja la REALIDAD FISCAL, no la realidad de caja.
@@ -406,8 +408,11 @@ def calculate_balance_sheet(df, assets_df, date_range=None):
         gastos_deducibles = df[(df['tipo'] == 'Gasto') & (df['tiene_factura'] == 1)]
     
     # Capital Social = Aportes en Efectivo + Aportes en Activos
-    total_aportes = df[is_aporte]['monto'].sum()
+    total_aportes_historico = df[is_aporte]['monto'].sum()
     aportes_efectivo = df[is_aporte_efectivo]['monto'].sum()
+    
+    capital_social_actualizado = total_aportes_historico * ufv_ratio
+    aitb_capital = capital_social_actualizado - total_aportes_historico
     
     # ========== 1. CÁLCULO DE PAGOS DE IMPUESTOS (Para ajustar Caja y Pasivos) ==========
     pagos_impuestos = df[df['tipo'] == 'Gasto']
@@ -441,8 +446,11 @@ def calculate_balance_sheet(df, assets_df, date_range=None):
     caja_final = aportes_efectivo + ingresos_brutos - gastos_caja_fiscal - total_pagos_impuestos
     
     # ========== 3. ACTIVOS FIJOS ==========
-    valor_activos = assets_df['valor_inicial'].sum() if not assets_df.empty else 0
-    dep_acumulada = calculate_period_depreciation(assets_df, 12)
+    valor_activos_historico = assets_df['valor_inicial'].sum() if not assets_df.empty else 0
+    valor_activos = valor_activos_historico * ufv_ratio
+    aitb_activos = valor_activos - valor_activos_historico
+    
+    dep_acumulada = calculate_period_depreciation(assets_df, 12, ufv_ratio)
     activos_netos = valor_activos - dep_acumulada
     
     # ========== 4. IMPUESTOS (PASIVOS) ==========
@@ -534,8 +542,9 @@ def calculate_balance_sheet(df, assets_df, date_range=None):
     # Utilidad antes de IT e IUE
     utilidad_antes_it = ingresos_netos_fiscales - gastos_netos_fiscales - dep_acumulada
     
-    # Restar IT
-    utilidad_antes_iue = utilidad_antes_it - it_total
+    # Restar IT y procesar AITB
+    aitb_neto = aitb_activos - aitb_capital
+    utilidad_antes_iue = utilidad_antes_it - it_total + aitb_neto
     
     # Calcular IUE (25%)
     iue_por_pagar = max(0, utilidad_antes_iue * 0.25)
@@ -569,9 +578,9 @@ def calculate_balance_sheet(df, assets_df, date_range=None):
             }
         },
         'patrimonio': {
-            'capital': total_aportes,
+            'capital': capital_social_actualizado,
             'resultados_acum': utilidad_neta_fiscal,
-            'total': total_aportes + utilidad_neta_fiscal
+            'total': capital_social_actualizado + utilidad_neta_fiscal
         }
     }
     
@@ -590,7 +599,7 @@ def calculate_balance_sheet(df, assets_df, date_range=None):
     
     return balance
 
-def calculate_balance_sheet_real(df, assets_df, date_range=None):
+def calculate_balance_sheet_real(df, assets_df, date_range=None, ufv_ratio=1.0):
     """
     Calcula Balance General REAL (Gerencial).
     Muestra la realidad de caja incluyendo TODOS los gastos (con y sin factura),
@@ -617,8 +626,11 @@ def calculate_balance_sheet_real(df, assets_df, date_range=None):
     is_aporte_activo = is_aporte & df['categoria'].str.lower().str.contains('activo', na=False)
     is_aporte_efectivo = is_aporte & (~df['categoria'].str.lower().str.contains('activo', na=False))
     
-    total_aportes = df[is_aporte]['monto'].sum()
+    total_aportes_historico = df[is_aporte]['monto'].sum()
     aportes_efectivo = df[is_aporte_efectivo]['monto'].sum()
+    
+    capital_social_actualizado = total_aportes_historico * ufv_ratio
+    aitb_capital = capital_social_actualizado - total_aportes_historico
     
     # ========== 1. CAJA REAL (Todos los movimientos) ==========
     ingresos_total = df[(df['tipo'] == 'Ingreso') & (~is_aporte)]['monto'].sum()
@@ -629,8 +641,11 @@ def calculate_balance_sheet_real(df, assets_df, date_range=None):
     caja_real = aportes_efectivo + ingresos_total - gastos_total
     
     # ========== 2. ACTIVOS FIJOS ==========
-    valor_activos = assets_df['valor_inicial'].sum() if not assets_df.empty else 0
-    dep_acumulada = calculate_period_depreciation(assets_df, 12)
+    valor_activos_historico = assets_df['valor_inicial'].sum() if not assets_df.empty else 0
+    valor_activos = valor_activos_historico * ufv_ratio
+    aitb_activos = valor_activos - valor_activos_historico
+    
+    dep_acumulada = calculate_period_depreciation(assets_df, 12, ufv_ratio)
     activos_netos = valor_activos - dep_acumulada
     
     # ========== 3. IMPUESTOS (Solo sobre facturados) ==========
@@ -846,7 +861,7 @@ def calculate_balance_sheet_real(df, assets_df, date_range=None):
     resultados_acum_real = utilidad_neta_fiscal - gastos_sin_factura_ajustado
     
     # Real Patrimonio = Capital + Real Results
-    patrimonio_real = total_aportes + resultados_acum_real
+    patrimonio_real = capital_social_actualizado + resultados_acum_real
     
     balance = {
         'activos': {
@@ -873,13 +888,13 @@ def calculate_balance_sheet_real(df, assets_df, date_range=None):
             }
         },
         'patrimonio': {
-            'capital': total_aportes,
-            'resultados_acum': resultados_acum_real,
+            'capital': capital_social_actualizado,
             'utilidad_fiscal': utilidad_neta_fiscal,
+            'resultados_acum': resultados_acum_real,
             'total': patrimonio_real
         },
         'info_adicional': {
-            'gastos_sin_factura': gastos_sin_factura_ajustado
+            'gastos_sin_factura': gastos_sin_factura_total
         }
     }
     

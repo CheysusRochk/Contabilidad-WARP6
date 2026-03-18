@@ -364,6 +364,11 @@ def generate_pdf_managerial_detailed(financial_data, period_name="Anual"):
     add_section("GASTOS FINANCIEROS (Intereses)", "gastos_financieros")
     add_section("IMPUESTOS DIRECTOS (IT/ITF)", "impuestos")
     
+    if financial_data.get('otros_ingresos', {}).get('total', 0) > 0:
+        add_section("OTROS INGRESOS", "otros_ingresos", is_deduction=False)
+    if financial_data.get('otros_gastos', {}).get('total', 0) > 0:
+        add_section("OTROS GASTOS", "otros_gastos")
+        
     # Utilidad Antes IUE
     uai = financial_data['kpis'].get('utilidad_antes_iue', 0)
     data.append([f"(=) UTILIDAD ANTES DE IUE", "", "", f"{uai:,.2f}"])
@@ -376,6 +381,13 @@ def generate_pdf_managerial_detailed(financial_data, period_name="Anual"):
     un = financial_data['kpis'].get('utilidad_neta', 0)
     pct_un = (un / total_ingresos * 100) if total_ingresos else 0
     data.append([f"(=) UTILIDAD NETA DEL PERIODO ({pct_un:.1f}%)", "", "", f"{un:,.2f}"])
+
+    if 'reserva_legal' in financial_data.get('kpis', {}):
+        rl = financial_data['kpis']['reserva_legal']
+        data.append([f"(-) RESERVA LEGAL (5%)", "", "", f"{rl:,.2f}"])
+        ul = financial_data['kpis'].get('utilidad_liquida', 0)
+        pct_ul = (ul / total_ingresos * 100) if total_ingresos else 0
+        data.append([f"(=) UTILIDAD LÍQUIDA DEL EJERCICIO ({pct_ul:.1f}%)", "", "", f"{ul:,.2f}"])
 
     # Build Table
     t = Table(data, colWidths=[2.5*inch, 1*inch, 2.5*inch, 1.5*inch])
@@ -503,12 +515,24 @@ def generate_pdf_legal_detailed(financial_data, period_name="Anual"):
 
     add_section("GASTOS FINANCIEROS", "gastos_financieros")
     add_section("IMPUESTOS DIRECTOS", "impuestos")
+    
+    if financial_data.get('otros_ingresos', {}).get('total', 0) > 0:
+        add_section("OTROS INGRESOS", "otros_ingresos", is_deduction=False)
+    if financial_data.get('otros_gastos', {}).get('total', 0) > 0:
+        add_section("OTROS GASTOS", "otros_gastos")
+        
     uai = financial_data['kpis'].get('utilidad_antes_iue', 0)
     data.append([f"(=) UTILIDAD ANTES DE IUE", "", "", f"{uai:,.2f}"])
     iue = financial_data['kpis'].get('iue', 0)
     data.append([f"(-) IUE ESTIMADO (25%)", "", "", f"{iue:,.2f}"])
     un = financial_data['kpis'].get('utilidad_neta', 0)
     data.append([f"(=) UTILIDAD NETA FISCAL", "", "", f"{un:,.2f}"])
+    
+    if 'reserva_legal' in financial_data.get('kpis', {}):
+        rl = financial_data['kpis']['reserva_legal']
+        data.append([f"(-) RESERVA LEGAL (5%)", "", "", f"{rl:,.2f}"])
+        ul = financial_data['kpis'].get('utilidad_liquida', 0)
+        data.append([f"(=) UTILIDAD LÍQUIDA DEL EJERCICIO", "", "", f"{ul:,.2f}"])
 
     t = Table(data, colWidths=[2.5*inch, 1*inch, 2.5*inch, 1.5*inch])
     t.setStyle(TableStyle([('TVALIGN', (0,0), (-1,-1), 'TOP'), ('BACKGROUND', (0,0), (-1,0), colors.darkgreen), ('TEXTCOLOR', (0,0), (-1,0), colors.white), ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold')]))
