@@ -419,6 +419,7 @@ def calculate_balance_sheet(df, assets_df, date_range=None, ufv_ratio=1.0):
     iva_pagado_acum = 0
     it_pagado_acum = 0
     retenciones_pagado_acum = 0
+    iue_pagado_acum = 0
     
     for _, row in pagos_impuestos.iterrows():
         det = str(row['detalle']).lower()
@@ -431,6 +432,8 @@ def calculate_balance_sheet(df, assets_df, date_range=None, ufv_ratio=1.0):
                 iva_pagado_acum += monto
             elif 'it' in det or '400' in det:
                 it_pagado_acum += monto
+            elif 'iue' in det and 'pago' in det:
+                iue_pagado_acum += monto
             elif 'retencion' in det or 'iue' in det and '410' in det: 
                 retenciones_pagado_acum += monto
 
@@ -442,7 +445,7 @@ def calculate_balance_sheet(df, assets_df, date_range=None, ufv_ratio=1.0):
     gastos_caja_fiscal = gastos_deducibles['monto'].sum()
     
     # Caja Fiscal = Aportes Efectivo + Ingresos - Gastos Operativos - PAGOS IMPUESTOS
-    total_pagos_impuestos = iva_pagado_acum + it_pagado_acum + retenciones_pagado_acum
+    total_pagos_impuestos = iva_pagado_acum + it_pagado_acum + retenciones_pagado_acum + iue_pagado_acum
     caja_final = aportes_efectivo + ingresos_brutos - gastos_caja_fiscal - total_pagos_impuestos
     
     # ========== 3. ACTIVOS FIJOS ==========
@@ -547,10 +550,15 @@ def calculate_balance_sheet(df, assets_df, date_range=None, ufv_ratio=1.0):
     utilidad_antes_iue = utilidad_antes_it - it_total + aitb_neto
     
     # Calcular IUE (25%)
-    iue_por_pagar = max(0, utilidad_antes_iue * 0.25)
+    iue_teorico = max(0, utilidad_antes_iue * 0.25)
+    iue_por_pagar = max(0, iue_teorico - iue_pagado_acum)
     
     # Utilidad Neta Fiscal
-    utilidad_neta_fiscal = utilidad_antes_iue - iue_por_pagar
+    utilidad_neta_fiscal = utilidad_antes_iue - iue_teorico
+    
+    # Activos de Impuestos Actualizados si hay saldo a favor en IUE
+    iue_saldo_favor = max(0, iue_pagado_acum - iue_teorico)
+    total_activos_impuestos += iue_saldo_favor
     
     # ========== 5. ESTRUCTURA DEL BALANCE ==========
     balance = {
@@ -707,6 +715,7 @@ def calculate_balance_sheet_real(df, assets_df, date_range=None, ufv_ratio=1.0):
     pagos_impuestos = df[df['tipo'] == 'Gasto']
     iva_pagado_acum = 0
     it_pagado_acum = 0
+    iue_pagado_acum = 0
     
     for _, row in pagos_impuestos.iterrows():
         det = str(row['detalle']).lower()
@@ -718,6 +727,8 @@ def calculate_balance_sheet_real(df, assets_df, date_range=None, ufv_ratio=1.0):
                 iva_pagado_acum += monto
             elif 'it' in det or '400' in det:
                 it_pagado_acum += monto
+            elif 'iue' in det and 'pago' in det:
+                iue_pagado_acum += monto
 
     iva_por_pagar = max(0, iva_df_total - iva_cf_total - iva_pagado_acum)
     iva_credito_fiscal = max(0, iva_cf_total - iva_df_total) # El crédito fiscal no se afecta por pagos, es saldo a favor
@@ -803,9 +814,10 @@ def calculate_balance_sheet_real(df, assets_df, date_range=None, ufv_ratio=1.0):
     utilidad_antes_iue = utilidad_antes_it - it_total
     
     # Calcular IUE (25%)
-    iue_por_pagar = max(0, utilidad_antes_iue * 0.25)
+    iue_teorico = max(0, utilidad_antes_iue * 0.25)
+    iue_por_pagar = max(0, iue_teorico - iue_pagado_acum)
     
-    utilidad_neta_fiscal = utilidad_antes_iue - iue_por_pagar
+    utilidad_neta_fiscal = utilidad_antes_iue - iue_teorico
     
     # ========== 5. GASTOS NO DEDUCIBLES (Ajuste) ==========
     gastos_sin_factura_total = gastos_no_deducibles_df['monto'].sum()
@@ -851,7 +863,8 @@ def calculate_balance_sheet_real(df, assets_df, date_range=None, ufv_ratio=1.0):
     iva_neto_gen = max(0, iva_df_total - iva_cf_total)
     reduccion_iva = min(iva_neto_gen, iva_pagado_acum)
     reduccion_it = min(it_total, it_pagado_acum)
-    total_reduccion_pasivo = reduccion_iva + reduccion_it
+    reduccion_iue = min(iue_teorico, iue_pagado_acum)
+    total_reduccion_pasivo = reduccion_iva + reduccion_it + reduccion_iue
     
     # Adjust: Subtract tax payments from non-deductibles 
     # (because they reduce liability, not equity)

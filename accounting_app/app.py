@@ -348,10 +348,13 @@ def show_reportes():
             st.info(f"📊 Seleccionando fecha de fin...")
             
     # Filter transactions by date range
+    df_unfiltered = df.copy()
     df = df[(df['fecha_dt'] >= pd.to_datetime(start_date)) & (df['fecha_dt'] <= pd.to_datetime(end_date))]
+    # Keep historical transactions up to end_date for Balance Sheet & Cash
+    df_historical = df_unfiltered[df_unfiltered['fecha_dt'] <= pd.to_datetime(end_date)]
     
-    if df.empty:
-        st.warning(f"No hay transacciones en el rango de fechas seleccionado.")
+    if df.empty and df_historical.empty:
+        st.warning(f"No hay transacciones registradas hasta la fecha seleccionada.")
         return
     
     st.markdown("---")
@@ -712,10 +715,10 @@ def show_reportes():
         pdf_mgr_detailed = reports.generate_pdf_managerial_detailed(mgr_data, "Acumulado Anual")
         
         # D. Balance Sheets
-        balance_data = logic.calculate_balance_sheet(df, assets_df, date_range, ufv_ratio)
-        balance_real_data = logic.calculate_balance_sheet_real(df, assets_df, date_range, ufv_ratio)
+        balance_data = logic.calculate_balance_sheet(df_historical, assets_df, date_range=None, ufv_ratio=ufv_ratio)
+        balance_real_data = logic.calculate_balance_sheet_real(df_historical, assets_df, date_range=None, ufv_ratio=ufv_ratio)
         
-        date_str = f"Del {start_date.strftime('%d/%m/%Y')} al {end_date.strftime('%d/%m/%Y')}"
+        date_str = f"Al {end_date.strftime('%d/%m/%Y')}"
         pdf_balance_sin = reports.generate_pdf_balance_sin(balance_data, date_str)
         pdf_balance_real = reports.generate_pdf_balance_real(balance_real_data, date_str)
         
@@ -833,23 +836,22 @@ def show_reportes():
         st.info("Dinero disponible tras pagar todos los gastos e impuestos.")
         
         # Recalculate quick numbers for Box
-        ingresos_efectivo = df[(df['tipo'] == 'Ingreso') & 
-                               (~df['categoria'].str.lower().str.contains('activo', na=False))]['monto'].sum()
+        ingresos_efectivo = df_historical[(df_historical['tipo'] == 'Ingreso') & 
+                               (~df_historical['categoria'].str.lower().str.contains('activo', na=False))]['monto'].sum()
         
         total_outflow = 0
         pagos_impuestos_realizados = 0
-        for _, row in df[df['tipo'] == 'Gasto'].iterrows():
+        for _, row in df_historical[df_historical['tipo'] == 'Gasto'].iterrows():
              total_outflow += row['monto']
              
-             # Rastrear cuánto pagamos de impuestos (para mostrarlo desglosado si se quiere)
              if "impuesto" in row['categoria'].lower() or "it" in row['categoria'].lower():
                  pagos_impuestos_realizados += row['monto']
 
         caja_operativa_bruta = ingresos_efectivo - total_outflow
         
-        # 2. Impuestos LEGALES Por Pagar (Futuros)
-        # IUE que se pagará al cierre de gestión (Calculado en el reporte legal)
-        iue_a_pagar = legal_detailed_data['kpis']['iue']
+        # 2. Impuestos LEGALES Por Pagar (Acumulados Históricamente)
+        # IUE total pendiente de pago registrado en el pasivo del Balance
+        iue_a_pagar = balance_data['pasivos']['corriente']['iue_por_pagar']
         
         # 3. Caja Líquida Final
         caja_final_neta = caja_operativa_bruta - iue_a_pagar
