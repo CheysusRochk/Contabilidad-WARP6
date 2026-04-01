@@ -105,7 +105,53 @@ def show_dashboard():
         st.info("No hay datos suficientes para mostrar el dashboard.")
         return
 
-    # Filter by period if needed, currently global
+    # --- FILTROS DE DASHBOARD ---
+    df['fecha_dt'] = pd.to_datetime(df['fecha'])
+    
+    # Pre-seleccionar este año fiscal por defecto
+    current_year = date.today().year
+    min_date_val = date(current_year, 1, 1) if not df.empty else date.today()
+    max_date_val = df['fecha_dt'].max().date() if not pd.isna(df['fecha_dt'].max()) else date.today()
+    min_date_val = min(min_date_val, max_date_val) # En caso de que max_date sea menor al inicio del año
+    
+    col_d1, col_d2 = st.columns(2)
+    with col_d1:
+        date_range = st.date_input(
+            "📅 Rango de Fechas:",
+            value=(min_date_val, max_date_val),
+            min_value=df['fecha_dt'].min().date() if not pd.isna(df['fecha_dt'].min()) else date.today(),
+            max_value=max(max_date_val, date.today())
+        )
+    with col_d2:
+        # Check if project column exists, default to General if missing
+        if 'proyecto' not in df.columns:
+            df['proyecto'] = 'General'
+            
+        proyectos_disponibles = df['proyecto'].dropna().unique().tolist()
+        proyectos_disponibles.insert(0, "Todos")
+        proyecto_seleccionado = st.selectbox("🏗️ Filtrar por Proyecto", options=proyectos_disponibles, index=0)
+        
+        excluir_externos = st.checkbox("💼 Excluir 'Gastos Externos/Favores'", value=False, help="Ignora facturas ajenas en los KPIs y gráficas del Dashboard")
+        
+    if len(date_range) == 2:
+        start_date, end_date = date_range
+    else:
+        start_date = end_date = date_range[0]
+        
+    df = df[(df['fecha_dt'] >= pd.to_datetime(start_date)) & (df['fecha_dt'] <= pd.to_datetime(end_date))]
+    
+    if proyecto_seleccionado != "Todos":
+        df = df[df['proyecto'] == proyecto_seleccionado]
+    
+    if df.empty:
+        st.info("No hay datos para los filtros seleccionados.")
+        return
+
+    if excluir_externos:
+        # Remover completamente los gastos externos de la vista general del dashboard
+        mask_exc = (df['tipo'] == 'Gasto') & df['categoria'].str.lower().str.contains('externo', na=False)
+        df = df[~mask_exc]
+
     gastos = df[df['tipo'] == 'Gasto'].copy()
     
     # Separar Ingresos Operativos (Ventas) de Aportes de Capital
@@ -1157,7 +1203,8 @@ def show_importador():
                         row['monto'],
                         row['metodo_pago'],
                         row['tiene_factura'],
-                        row['aplica_retencion']
+                        row['aplica_retencion'],
+                        row.get('proyecto', 'General')
                     )
                     count += 1
                     progress_bar.progress(count / len(df_preview))

@@ -11,7 +11,8 @@ TEMPLATE_COLUMNS = [
     "Monto",
     "Metodo_Pago",
     "Tiene_Factura (Si/No)",
-    "Aplica_Retencion (Si/No)"
+    "Aplica_Retencion (Si/No)",
+    "Proyecto"
 ]
 
 def generate_template():
@@ -29,13 +30,11 @@ def process_import_file(uploaded_file):
     try:
         df = pd.read_excel(uploaded_file)
         
-        # Check basic columns existence (allowing flexibility in naming if possible, but strict for now)
-        # We will map "Template Columns" to "DB Columns"
+        # Check basic columns existence
+        has_proyecto_col = df.shape[1] >= 11 or "Proyecto" in df.columns
         
-        # If user uploads old template (9 cols), we should gracefully handle it, OR enforce 10.
-        # Enforcing new template is safer to ensure they know about the feature.
-        if len(df.columns) != len(TEMPLATE_COLUMNS):
-            return None, f"El archivo tiene {len(df.columns)} columnas, se esperaban {len(TEMPLATE_COLUMNS)}. Por favor descargue la NUEVA plantilla."
+        if len(df.columns) < 10:
+            return None, f"El archivo tiene {len(df.columns)} columnas, se esperaban al menos 10. Por favor descargue la NUEVA plantilla."
             
         normalized_data = []
         errors = []
@@ -65,6 +64,17 @@ def process_import_file(uploaded_file):
                     aplica_retencion = True
                 else:
                     aplica_retencion = False
+                    
+                # Parsing Proyecto
+                proyecto = "General"
+                if has_proyecto_col and len(row) >= 11 and pd.notna(row.iloc[10]):
+                    parsed_proy = str(row.iloc[10]).strip()
+                    if parsed_proy:
+                        proyecto = parsed_proy
+                elif "Proyecto" in df.columns and pd.notna(row["Proyecto"]):
+                    parsed_proy = str(row["Proyecto"]).strip()
+                    if parsed_proy:
+                        proyecto = parsed_proy
                 
                 if tipo not in ['Ingreso', 'Gasto']:
                     errors.append(f"Fila {index+2}: Tipo '{tipo}' inválido. Use 'Ingreso' o 'Gasto'.")
@@ -80,7 +90,8 @@ def process_import_file(uploaded_file):
                     'monto': monto,
                     'metodo_pago': metodo_pago,
                     'tiene_factura': tiene_factura,
-                    'aplica_retencion': aplica_retencion
+                    'aplica_retencion': aplica_retencion,
+                    'proyecto': proyecto
                 })
                 
             except Exception as e:

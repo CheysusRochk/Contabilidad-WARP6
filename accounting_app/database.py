@@ -35,6 +35,13 @@ def init_db():
     except sqlite3.OperationalError:
         c.execute("ALTER TABLE transactions ADD COLUMN aplica_retencion BOOLEAN DEFAULT 0")
         conn.commit()
+        
+    # MIGRATION CHECK: Add proyecto if not exists
+    try:
+        c.execute("SELECT proyecto FROM transactions LIMIT 1")
+    except sqlite3.OperationalError:
+        c.execute("ALTER TABLE transactions ADD COLUMN proyecto TEXT DEFAULT 'General'")
+        conn.commit()
     
     # Tabla de Activos Fijos
     c.execute('''
@@ -61,13 +68,13 @@ def clear_all_transactions():
     conn.commit()
     conn.close()
 
-def add_transaction(fecha, tipo, categoria, detalle, n_factura, nit, monto, metodo_pago, tiene_factura, aplica_retencion=False):
+def add_transaction(fecha, tipo, categoria, detalle, n_factura, nit, monto, metodo_pago, tiene_factura, aplica_retencion=False, proyecto='General'):
     conn = get_connection()
     c = conn.cursor()
     c.execute('''
-        INSERT INTO transactions (fecha, tipo, categoria, detalle, n_factura, nit, monto, metodo_pago, tiene_factura, aplica_retencion)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (fecha, tipo, categoria, detalle, n_factura, nit, monto, metodo_pago, tiene_factura, aplica_retencion))
+        INSERT INTO transactions (fecha, tipo, categoria, detalle, n_factura, nit, monto, metodo_pago, tiene_factura, aplica_retencion, proyecto)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (fecha, tipo, categoria, detalle, n_factura, nit, monto, metodo_pago, tiene_factura, aplica_retencion, proyecto))
     conn.commit()
     conn.close()
 
