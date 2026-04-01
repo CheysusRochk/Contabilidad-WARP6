@@ -262,6 +262,7 @@ def get_monthly_tax_summary(df):
     periodos = sorted(df['periodo_mes'].unique())
     
     resumen = {}
+    saldo_favor_iva = 0
     
     for period in periodos:
         month_df = df[df['periodo_mes'] == period]
@@ -275,7 +276,14 @@ def get_monthly_tax_summary(df):
         iva_df = ventas_facturadas['monto'].sum() * IVA_RATE
         iva_cf = compras_facturadas['monto'].sum() * IVA_RATE
         
-        iva_determinado = max(0, iva_df - iva_cf)
+        cf_disponible = iva_cf + saldo_favor_iva
+        
+        if iva_df > cf_disponible:
+            iva_determinado = iva_df - cf_disponible
+            saldo_favor_iva = 0
+        else:
+            iva_determinado = 0
+            saldo_favor_iva = cf_disponible - iva_df
         
         # 2. IT (3% de Ventas Brutas)
         it_determinado = ventas_facturadas['monto'].sum() * IT_RATE
@@ -319,6 +327,7 @@ def get_monthly_tax_summary(df):
             'it_determinado': it_determinado,
             'iva_pagado': iva_pagado,
             'it_pagado': it_pagado,
+            'saldo_favor_iva': saldo_favor_iva,
             'total_determinado': iva_determinado + it_determinado,
             'total_pagado': iva_pagado + it_pagado
         }

@@ -925,8 +925,8 @@ def show_reportes():
         st.subheader("📅 Calendario Fiscal Mensual")
         st.markdown("*Desglose mes a mes de impuestos generados y pagados*")
         
-        # Usar la nueva lógica centralizada de resúmenes fiscales mensuales
-        tax_summary = logic.get_monthly_tax_summary(df)
+        # Usar la nueva lógica centralizada de resúmenes fiscales mensuales (desde el inicio para arrastrar saldo)
+        tax_summary = logic.get_monthly_tax_summary(df_historical)
         
         if not tax_summary:
             st.info("No hay datos suficientes para mostrar el calendario mensual.")
@@ -935,6 +935,7 @@ def show_reportes():
             for mes, vals in tax_summary.items():
                 monthly_data.append({
                     'Mes': mes,
+                    'Saldo Favor IVA': vals['saldo_favor_iva'],
                     'IVA Adeudado': vals['iva_determinado'],
                     'IVA Pagado': vals['iva_pagado'],
                     'IT Adeudado': vals['it_determinado'],
