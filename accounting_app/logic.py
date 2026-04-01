@@ -788,6 +788,9 @@ def calculate_balance_sheet_real(df, assets_df, date_range=None, ufv_ratio=1.0, 
         ar = row.get('aplica_retencion', 0) == 1
         taxes = calculate_taxes(row['monto'], row['tipo'], row['tiene_factura'] == 1, row['categoria'], aplica_retencion=ar)
         
+        # Determine if this row is CAPEX
+        row_is_capex = is_capex(row)
+        
         # Determine if we should exclude this as external
         is_external = excluir_externos and 'externo' in str(row['categoria']).lower()
         
