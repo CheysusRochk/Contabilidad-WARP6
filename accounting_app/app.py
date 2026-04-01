@@ -670,9 +670,14 @@ def show_reportes():
             item_dict = {'fecha': str(row['fecha']), 'detalle': detalle_str, 'monto': expense_amount}
             
             if clas == 'Excluir P&L (Pago Pasivo)':
-                 # Allow Tax payments for Cash Basis Managerial Report
-                 # User wants to see "Pago IVA", "Pago IT" from Excel
+                 # Allow Tax payments for Cash Basis Managerial Report (like monthly IVA/IT)
                  cat_str = row['categoria'].lower()
+                 det_str = row['detalle'].lower()
+                 
+                 # NEVER include IUE payments in P&L, it's a liability payment from the previous year
+                 if "iue" in cat_str or "iue" in det_str:
+                     continue
+                     
                  if "pago" in cat_str and ("impuesto" in cat_str or "iva" in cat_str or "it" in cat_str):
                       mgr_data['impuestos']['total'] += expense_amount
                       mgr_data['impuestos']['items'].append(item_dict)
