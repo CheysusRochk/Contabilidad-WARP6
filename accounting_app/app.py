@@ -480,6 +480,51 @@ def show_reportes():
         st.dataframe(display_df, use_container_width=True)
 
         st.markdown("---")
+        
+        # --- MINI ESTADO DE RESULTADOS POR PROYECTO/FILTRO ---
+        st.subheader("📊 Análisis de Rentabilidad Real (P&L del Filtro Activo)")
+        st.caption("Calcula si estas transacciones filtradas generaron ganancias o pérdidas, descontando automáticamente el IVA (DF/CF) y el IT correspondientes a la ley boliviana, simulando el comportamiento contable exacto.")
+        
+        mini_ingresos_raw = df_exp[df_exp['tipo'] == 'Ingreso'].copy()
+        is_aporte_exp = mini_ingresos_raw['categoria'].str.lower().str.contains('aporte', na=False) & \
+                        mini_ingresos_raw['categoria'].str.lower().str.contains('capital', na=False)
+        mini_ingresos = mini_ingresos_raw[~is_aporte_exp]
+        
+        mini_gastos = df_exp[df_exp['tipo'] == 'Gasto'].copy()
+        
+        brk = {
+            'ingreso_bruto': mini_ingresos['monto'].sum(),
+            'gasto_bruto': mini_gastos['monto'].sum(),
+            'iva_df': 0, 'it': 0, 'ingreso_neto': 0,
+            'iva_cf': 0, 'gasto_neto': 0
+        }
+        
+        for _, r in mini_ingresos.iterrows():
+            tx = logic.calculate_taxes(r['monto'], r['tipo'], r['tiene_factura'] == 1, str(r['categoria']))
+            brk['iva_df'] += tx.get('iva_df', 0)
+            brk['it'] += tx.get('it', 0)
+            brk['ingreso_neto'] += tx.get('ingreso_neto', 0)
+            
+        for _, r in mini_gastos.iterrows():
+            clas = logic.classify_account(str(r['categoria']))
+            if clas == 'Excluir P&L (Pago Pasivo)' or 'impuesto' in str(r['categoria']).lower() or 'tributo' in str(r['categoria']).lower(): 
+                continue
+            ar = r.get('aplica_retencion', 0) == 1
+            tx = logic.calculate_taxes(r['monto'], r['tipo'], r['tiene_factura'] == 1, str(r['categoria']), aplica_retencion=ar)
+            brk['iva_cf'] += tx.get('iva_cf', 0)
+            brk['gasto_neto'] += tx.get('gasto_neto', 0)
+            
+        utilidad_filtro = brk['ingreso_neto'] - brk['gasto_neto'] - brk['it']
+        
+        c_pnl1, c_pnl2, c_pnl3, c_pnl4 = st.columns(4)
+        c_pnl1.metric("Ingresos Netos (Sin IVA DF)", f"Bs {brk['ingreso_neto']:,.2f}", help="Ventas reales quitando el 13% que se va al fisco.")
+        c_pnl2.metric("Costos Netos (Descontando CF/Ret)", f"Bs {brk['gasto_neto']:,.2f}", help="Costo real de los materiales/servicios descontando el IVA a tu favor.")
+        c_pnl3.metric("Impuestos (IT pagado)", f"Bs {brk['it']:,.2f}", help="El 3% de Impuesto a las Transacciones.")
+        c_pnl4.metric("💰 UTILIDAD REAL DEL FILTRO", f"Bs {utilidad_filtro:,.2f}", 
+                  delta="Ganancia/Aporte neto" if utilidad_filtro >= 0 else "Pérdida/Fuga de capital", 
+                  delta_color="normal" if utilidad_filtro >= 0 else "inverse")
+        
+        st.markdown("---")
 
     with tab1:
         # Cálculos Generales (Excluyendo Aportes de Capital de los INGRESOS OPERATIVOS)
