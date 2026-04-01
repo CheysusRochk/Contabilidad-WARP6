@@ -169,8 +169,9 @@ def show_dashboard():
     total_aportes = aportes_capital['monto'].sum()
     total_gastos = gastos['monto'].sum()
     
-    # Calculo de Crédito Fiscal Perdido (SQLite guarda booleanos como 0/1)
-    gastos_sin_factura = gastos[gastos['tiene_factura'] == 0]
+    # Calculo de Crédito Fiscal Perdido (excluir pagos de impuestos ya que nunca dan factura)
+    is_tax_payment = gastos['categoria'].str.lower().str.contains('impuesto|tributo', na=False, regex=True)
+    gastos_sin_factura = gastos[(gastos['tiene_factura'] == 0) & (~is_tax_payment)]
     gastos_no_deducibles = gastos_sin_factura['monto'].sum()
     cf_perdido = gastos_sin_factura['monto'].sum() * 0.13
     
@@ -425,24 +426,59 @@ def show_reportes():
     st.markdown("---")
 
     # --- PESTAÑAS DE REPORTES ---
-    tab1, tab2 = st.tabs(["Resumen Financiero", "Detalle de Transacciones"])
+    tab1, tab2 = st.tabs(["Resumen Financiero", "Analítica Avanzada (Excel Superpoderes)"])
 
     with tab2:
-        st.subheader("🔍 Detalle de Registros")
+        st.subheader("🔍 Explorador Dinámico de Transacciones")
+        st.info("Utiliza los filtros de abajo para segmentar tus datos exactamente como necesitas. El total sumará solo las filas visibles.")
         
-        c_ing, c_gas = st.columns(2)
-        with c_ing:
-            st.write("🔹 **Ingresos y Aportes**")
-            df_ing = df[df['tipo'] == 'Ingreso']
-            st.dataframe(df_ing, use_container_width=True)
-            st.metric("Total Ingresado", f"Bs {df_ing['monto'].sum():,.2f}")
+        df_exp = df.copy()
+        if 'proyecto' not in df_exp.columns:
+            df_exp['proyecto'] = 'General'
             
-        with c_gas:
-            st.write("🔸 **Gastos y Salidas**")
-            df_gas = df[df['tipo'] == 'Gasto']
-            st.dataframe(df_gas, use_container_width=True)
-            st.metric("Total Gastado", f"Bs {df_gas['monto'].sum():,.2f}")
+        col_f1, col_f2, col_f3 = st.columns(3)
+        with col_f1:
+            proy_list = ["Todos"] + df_exp['proyecto'].dropna().unique().tolist()
+            sel_proy = st.selectbox("🏗️ Filtrar por Proyecto", proy_list, key="rep_proy")
             
+        with col_f2:
+            sel_tipo = st.selectbox("🔄 Filtrar por Tipo", ["Todos", "Ingreso", "Gasto"], key="rep_tipo")
+            
+        with col_f3:
+            factura_filt = st.radio("📄 Filtro de Factura", ["Ambos", "Solo Con Factura", "Solo Sin Factura"])
+
+        if sel_proy != "Todos":
+            df_exp = df_exp[df_exp['proyecto'] == sel_proy]
+        if sel_tipo != "Todos":
+            df_exp = df_exp[df_exp['tipo'] == sel_tipo]
+        if factura_filt == "Solo Con Factura":
+            df_exp = df_exp[df_exp['tiene_factura'] == 1]
+        elif factura_filt == "Solo Sin Factura":
+            df_exp = df_exp[df_exp['tiene_factura'] == 0]
+            
+        cat_list = ["Todas"] + df_exp['categoria'].dropna().unique().tolist()
+        sel_cat = st.selectbox("🏷️ Filtrar por Categoría", cat_list, help="Las categorías disponibles se actualizan según el proyecto elegido.")
+        if sel_cat != "Todas":
+            df_exp = df_exp[df_exp['categoria'] == sel_cat]
+            
+        st.markdown("---")
+        
+        st.metric(f"💰 SUMA TOTAL FILTRADA ({len(df_exp)} registros)", f"Bs {df_exp['monto'].sum():,.2f}")
+        
+        cols_to_show = ['fecha', 'proyecto', 'tipo', 'categoria', 'detalle', 'monto', 'n_factura', 'metodo_pago', 'tiene_factura', 'aplica_retencion']
+        cols_avail = [c for c in cols_to_show if c in df_exp.columns]
+        
+        # Format some display properties gracefully
+        display_df = df_exp[cols_avail].copy()
+        if 'fecha' in display_df.columns:
+            display_df['fecha'] = pd.to_datetime(display_df['fecha']).dt.strftime('%d/%m/%Y')
+        if 'tiene_factura' in display_df.columns:
+            display_df['tiene_factura'] = display_df['tiene_factura'].apply(lambda x: 'Sí' if x == 1 else 'No')
+        if 'aplica_retencion' in display_df.columns:
+            display_df['aplica_retencion'] = display_df['aplica_retencion'].apply(lambda x: 'Sí' if x == 1 else 'No')
+            
+        st.dataframe(display_df, use_container_width=True)
+
         st.markdown("---")
 
     with tab1:
