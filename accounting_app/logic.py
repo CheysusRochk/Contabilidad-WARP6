@@ -616,7 +616,7 @@ def calculate_balance_sheet(df, assets_df, date_range=None, ufv_ratio=1.0):
     
     return balance
 
-def calculate_balance_sheet_real(df, assets_df, date_range=None, ufv_ratio=1.0):
+def calculate_balance_sheet_real(df, assets_df, date_range=None, ufv_ratio=1.0, excluir_externos=False):
     """
     Calcula Balance General REAL (Gerencial).
     Muestra la realidad de caja incluyendo TODOS los gastos (con y sin factura),
@@ -652,6 +652,11 @@ def calculate_balance_sheet_real(df, assets_df, date_range=None, ufv_ratio=1.0):
     # ========== 1. CAJA REAL (Todos los movimientos) ==========
     ingresos_total = df[(df['tipo'] == 'Ingreso') & (~is_aporte)]['monto'].sum()
     gastos_total = df[df['tipo'] == 'Gasto']['monto'].sum()
+    
+    if excluir_externos:
+        mask_externos = df['categoria'].str.lower().str.contains('externo', na=False)
+        gastos_externos_monto = df[(df['tipo'] == 'Gasto') & mask_externos]['monto'].sum()
+        gastos_total -= gastos_externos_monto
     
     # Caja Real = SOLO Aportes en Efectivo + Ingresos - TODOS los Gastos
     # Los aportes de activos NO entran a caja
@@ -783,11 +788,11 @@ def calculate_balance_sheet_real(df, assets_df, date_range=None, ufv_ratio=1.0):
         ar = row.get('aplica_retencion', 0) == 1
         taxes = calculate_taxes(row['monto'], row['tipo'], row['tiene_factura'] == 1, row['categoria'], aplica_retencion=ar)
         
-        # Determine if this row is CAPEX
-        row_is_capex = is_capex(row)
+        # Determine if we should exclude this as external
+        is_external = excluir_externos and 'externo' in str(row['categoria']).lower()
         
-        # Accumulate Net Expense ONLY if NOT CAPEX
-        if not row_is_capex:
+        # Accumulate Net Expense ONLY if NOT CAPEX and NOT EXCLUDED
+        if not row_is_capex and not is_external:
             if 'gasto_neto' in taxes:
                  gastos_netos_fiscales += taxes['gasto_neto'] # Gross if retention, Net if invoice
             else:
@@ -795,7 +800,7 @@ def calculate_balance_sheet_real(df, assets_df, date_range=None, ufv_ratio=1.0):
                      gastos_netos_fiscales += row['monto'] * 0.87
         
         # Accumulate Retention Liability (Always, even if CAPEX - though usually Services)
-        if 'retenciones' in taxes:
+        if 'retenciones' in taxes and not is_external:
              retenciones_liability_total += taxes['retenciones']['total']
              
     # Recalculate Non-Deductible for equation: Expenses that are NOT CAPEX and have NO Invoice/Retention
@@ -838,6 +843,11 @@ def calculate_balance_sheet_real(df, assets_df, date_range=None, ufv_ratio=1.0):
     # Gasto puro no deducible (excluyendo lo que fue pago de pasivos/impuestos)
     gastos_sin_factura_puros = max(0, gastos_sin_factura_total - pago_impuestos_total)
     
+    if excluir_externos:
+        mask_externos_sinf = df['categoria'].str.lower().str.contains('externo', na=False) & (df['tiene_factura'] == 0)
+        gastos_externos_sinf = df[(df['tipo'] == 'Gasto') & mask_externos_sinf]['monto'].sum()
+        gastos_sin_factura_puros = max(0, gastos_sin_factura_puros - gastos_externos_sinf)
+    
     # Saldos a Favor (exceso de pago sobre la deuda teórica)
     iva_neto_gen = max(0, iva_df_total - iva_cf_total)
     iva_saldo_favor_pago = max(0, iva_pagado_acum - iva_neto_gen)
@@ -856,6 +866,16 @@ def calculate_balance_sheet_real(df, assets_df, date_range=None, ufv_ratio=1.0):
     # ========== 6. PATRIMONIO REAL (Bottom-Up Calculation) ==========
     # Start with Fiscal Utility, deduct pure non-deductibles
     resultados_acum_real = utilidad_neta_fiscal - gastos_sin_factura_puros
+    
+    if excluir_externos:
+        # Sumar el 13% IVA regalado por compras que en gerencia no gastaste
+        mask_externos_fact = df['categoria'].str.lower().str.contains('externo', na=False) & (df['tiene_factura'] == 1)
+        gastos_externos_facturados = df[(df['tipo'] == 'Gasto') & mask_externos_fact]
+        iva_regalado = 0
+        for _, r in gastos_externos_facturados.iterrows():
+            tx = calculate_taxes(r['monto'], r['tipo'], True, str(r['categoria']))
+            iva_regalado += tx.get('iva_cf', 0)
+        resultados_acum_real += iva_regalado
     
     # Agregamos AITB para asegurar que el balance cuadre (ya que activos y capital lo sufren)
     aitb_neto = aitb_activos - aitb_capital

@@ -371,6 +371,12 @@ def show_reportes():
     ufv_ratio = ufv_final / ufv_inicial if ufv_inicial > 0 else 1.0
 
     st.markdown("---")
+    
+    # --- FILTRO GERENCIAL ---
+    st.markdown("### 💼 Filtro Gerencial de Favores")
+    excluir_externos = st.checkbox("Excluir 'Gastos Externos/Favores' del Análisis Gerencial", value=False, help="Ignora facturas ajenas para mostrar tu rentabilidad y liquidez real. El 13% generado por estas facturas se mostrará como Ahorro Fiscal.")
+    
+    st.markdown("---")
 
     # --- PESTAÑAS DE REPORTES ---
     tab1, tab2 = st.tabs(["Resumen Financiero", "Detalle de Transacciones"])
@@ -685,6 +691,16 @@ def show_reportes():
                  else:
                       continue
 
+            # Omitir Gastos Externos si el filtro está activado
+            if excluir_externos and 'externo' in row['categoria'].lower():
+                 if row['tiene_factura'] == 1:
+                      taxes = logic.calculate_taxes(row['monto'], row['tipo'], True, row['categoria'])
+                      iva_ahorro = taxes.get('iva_cf', 0)
+                      if iva_ahorro > 0:
+                           mgr_data['ingresos']['total'] += iva_ahorro
+                           mgr_data['ingresos']['items'].append({'fecha': str(row['fecha']), 'detalle': f"Ahorro Fiscal 13% por Favor ({row['detalle']})", 'monto': iva_ahorro})
+                 continue
+
             elif clas == 'Impuestos': 
                  mgr_data['impuestos']['total'] += expense_amount
                  mgr_data['impuestos']['items'].append(item_dict)
@@ -721,7 +737,7 @@ def show_reportes():
         
         # D. Balance Sheets
         balance_data = logic.calculate_balance_sheet(df_historical, assets_df, date_range=None, ufv_ratio=ufv_ratio)
-        balance_real_data = logic.calculate_balance_sheet_real(df_historical, assets_df, date_range=None, ufv_ratio=ufv_ratio)
+        balance_real_data = logic.calculate_balance_sheet_real(df_historical, assets_df, date_range=None, ufv_ratio=ufv_ratio, excluir_externos=excluir_externos)
         
         date_str = f"Al {end_date.strftime('%d/%m/%Y')}"
         pdf_balance_sin = reports.generate_pdf_balance_sin(balance_data, date_str)
@@ -847,6 +863,9 @@ def show_reportes():
         total_outflow = 0
         pagos_impuestos_realizados = 0
         for _, row in df_historical[df_historical['tipo'] == 'Gasto'].iterrows():
+             if excluir_externos and 'externo' in str(row['categoria']).lower():
+                 continue
+                 
              total_outflow += row['monto']
              
              if "impuesto" in row['categoria'].lower() or "it" in row['categoria'].lower():
