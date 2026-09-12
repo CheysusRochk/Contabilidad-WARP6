@@ -1,11 +1,22 @@
 import sqlite3
 import pandas as pd
+import os
+import shutil
 from datetime import datetime
 
-DB_NAME = "contabilidad_warp6.db"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_NAME = os.path.join(BASE_DIR, "contabilidad_warp6.db")
+
+def get_db_path():
+    return DB_NAME
 
 def get_connection():
-    conn = sqlite3.connect(DB_NAME, check_same_thread=False)
+    conn = sqlite3.connect(DB_NAME, check_same_thread=False, timeout=10.0)
+    try:
+        conn.execute("PRAGMA journal_mode = WAL;")
+        conn.execute("PRAGMA busy_timeout = 5000;")
+    except sqlite3.OperationalError:
+        pass
     return conn
 
 def init_db():
@@ -60,6 +71,26 @@ def init_db():
     conn.close()
 
 def clear_all_transactions():
+    # Generar backup automático de seguridad antes del borrado masivo
+    if os.path.exists(DB_NAME):
+        backup_dir = os.path.join(BASE_DIR, "backups")
+        os.makedirs(backup_dir, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = os.path.join(backup_dir, f"backup_pre_clear_{timestamp}.db")
+        try:
+            # Respaldo online seguro usando API nativa de SQLite
+            src_conn = sqlite3.connect(DB_NAME)
+            dst_conn = sqlite3.connect(backup_path)
+            with dst_conn:
+                src_conn.backup(dst_conn)
+            dst_conn.close()
+            src_conn.close()
+        except Exception:
+            try:
+                shutil.copy2(DB_NAME, backup_path)
+            except Exception:
+                pass
+
     conn = get_connection()
     c = conn.cursor()
     c.execute("DELETE FROM transactions")

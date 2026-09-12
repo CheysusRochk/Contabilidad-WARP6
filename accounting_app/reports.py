@@ -1,5 +1,6 @@
 import pandas as pd
 from io import BytesIO
+import html
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter, landscape
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
@@ -7,11 +8,24 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from datetime import datetime
 
+def sanitize_excel_cell(val):
+    """Previene inyección de fórmulas (CWE-1236) en celdas de texto de Excel manteniendo números y texto normal intactos."""
+    if val is None or pd.isna(val):
+        return ""
+    s_val = str(val).strip()
+    if s_val and s_val[0] in ('=', '@', '\t', '\r'):
+        return f"'{s_val}"
+    return val
+
 def generate_excel_rcv(df):
     """Genera archivo Excel con formato RCV (Registro Compras/Ventas)."""
     output = BytesIO()
+    df_clean = df.copy()
+    for col in ['detalle', 'n_factura', 'nit']:
+        if col in df_clean.columns:
+            df_clean[col] = df_clean[col].apply(sanitize_excel_cell)
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name='Transacciones')
+        df_clean.to_excel(writer, index=False, sheet_name='Transacciones')
     return output.getvalue()
 
 def _add_header(elements, title, subtitle="WARP6 SOLUTIONS S.R.L."):
@@ -62,9 +76,9 @@ def generate_pdf_libro_diario(df):
     for _, row in df.iterrows():
         # Generar Asiento Contable Simplificado
         fecha = str(row['fecha'])
-        glosa = row['detalle']
+        glosa = html.escape(str(row['detalle']))
         monto = row['monto']
-        categoria = row['categoria']
+        categoria = html.escape(str(row['categoria']))
         
         # Header Asiento
         data.append([f"{fecha}", f"--- Asiento Nº {num_asiento} ---", "", ""])
@@ -148,7 +162,7 @@ def generate_pdf_balance_general(assets_df, cash_balance, equity_total, result_a
     if not assets_df.empty:
         for _, asset in assets_df.iterrows():
             val = asset['valor_inicial'] 
-            data_fixed.append([f"   {asset['nombre']}", f"{val:,.2f}"])
+            data_fixed.append([f"   {html.escape(str(asset['nombre']))}", f"{val:,.2f}"])
             total_fixed_assets += val
     
     data_fixed.append(["TOTAL ACTIVO NO CORRIENTE", f"{total_fixed_assets:,.2f}"])
@@ -210,18 +224,18 @@ def generate_excel_rcv(df_transactions):
     # N° | Fecha | N° Factura | NIT | Razón Social | Importe Total | ICE | Exentos | Tasa Cero | Subtotal | Descuentos | Importe Base DF | Debito Fiscal
     reporte_ventas = pd.DataFrame()
     reporte_ventas['Fecha'] = ventas['fecha']
-    reporte_ventas['N° Factura'] = ventas['n_factura']
-    reporte_ventas['NIT Cliente'] = ventas['nit']
-    reporte_ventas['Razón Social/Detalle'] = ventas['detalle']
+    reporte_ventas['N° Factura'] = ventas['n_factura'].apply(sanitize_excel_cell)
+    reporte_ventas['NIT Cliente'] = ventas['nit'].apply(sanitize_excel_cell)
+    reporte_ventas['Razón Social/Detalle'] = ventas['detalle'].apply(sanitize_excel_cell)
     reporte_ventas['Importe Total'] = ventas['monto']
     reporte_ventas['Débito Fiscal IVA'] = ventas['monto'] * 0.13
     
     # Formato Compras SIAT (Simplificado)
     reporte_compras = pd.DataFrame()
     reporte_compras['Fecha'] = al_compras = compras['fecha']
-    reporte_compras['N° Factura'] = compras['n_factura']
-    reporte_compras['NIT Proveedor'] = compras['nit']
-    reporte_compras['Detalle'] = compras['detalle']
+    reporte_compras['N° Factura'] = compras['n_factura'].apply(sanitize_excel_cell)
+    reporte_compras['NIT Proveedor'] = compras['nit'].apply(sanitize_excel_cell)
+    reporte_compras['Detalle'] = compras['detalle'].apply(sanitize_excel_cell)
     reporte_compras['Importe Total'] = compras['monto']
     # Solo si tiene factura hay crédito fiscal
     reporte_compras['Crédito Fiscal IVA'] = compras.apply(lambda x: x['monto'] * 0.13 if x['tiene_factura'] else 0, axis=1)
@@ -331,7 +345,7 @@ def generate_pdf_managerial_detailed(financial_data, period_name="Anual"):
             data.append([
                 "", 
                 item.get('fecha', ''), 
-                Paragraph(item.get('detalle', ''), style_item), 
+                Paragraph(html.escape(str(item.get('detalle', ''))), style_item), 
                 f"{item.get('monto', 0):,.2f}"
             ])
         
@@ -497,7 +511,7 @@ def generate_pdf_legal_detailed(financial_data, period_name="Anual"):
         sign = "(-)" if is_deduction else "(+)"
         data.append([f"{sign} {title}", "", "", f"{total:,.2f}"])
         for item in section_data.get('items', []):
-            data.append(["", item.get('fecha', ''), Paragraph(item.get('detalle', ''), style_item), f"{item.get('monto', 0):,.2f}"])
+            data.append(["", item.get('fecha', ''), Paragraph(html.escape(str(item.get('detalle', ''))), style_item), f"{item.get('monto', 0):,.2f}"])
         return total
 
     total_ingresos = add_section("INGRESOS FACTURADOS", "ingresos", is_deduction=False)
@@ -723,7 +737,7 @@ def generate_pdf_gerencial_completo(balance_data, breakdown_mgr, period_name="an
     
     proj_data = [["Fecha", "Cliente/Detalle", "Monto"]]
     for i in items_sorted:
-        proj_data.append([i['fecha'], Paragraph(i['detalle'][:50], styles['Normal']), f"{i['monto']:,.2f}"])
+        proj_data.append([i['fecha'], Paragraph(html.escape(str(i['detalle'][:50])), styles['Normal']), f"{i['monto']:,.2f}"])
         
     t3 = Table(proj_data, colWidths=[1.5*inch, 3*inch, 1.5*inch])
     t3.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.darkgreen), ('TEXTCOLOR', (0,0), (-1,0), colors.white)]))

@@ -28,8 +28,17 @@ def process_import_file(uploaded_file):
     Reads the uploaded Excel file, validates structure, and returns a normalized DataFrame.
     """
     try:
+        # Validar tamaño máximo de archivo (15 MB)
+        file_size = getattr(uploaded_file, 'size', None)
+        if file_size and file_size > 15 * 1024 * 1024:
+            return None, "El archivo supera el límite de seguridad de 15 MB."
+
         df = pd.read_excel(uploaded_file)
         
+        # Validar límite de registros por archivo
+        if len(df) > 10000:
+            return None, f"El archivo contiene {len(df):,} filas. El límite máximo permitido por importación es de 10,000 transacciones."
+
         # Check basic columns existence
         has_proyecto_col = df.shape[1] >= 11 or "Proyecto" in df.columns
         
