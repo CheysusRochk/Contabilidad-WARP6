@@ -47,8 +47,12 @@ def check_password():
 
     # Obtener credencial segura desde variables de entorno o secrets de Streamlit
     admin_password = os.environ.get("ADMIN_PASSWORD")
-    if not admin_password and "ADMIN_PASSWORD" in st.secrets:
-        admin_password = str(st.secrets["ADMIN_PASSWORD"])
+    if not admin_password:
+        try:
+            if "ADMIN_PASSWORD" in st.secrets:
+                admin_password = str(st.secrets["ADMIN_PASSWORD"])
+        except Exception:
+            pass
     if not admin_password:
         # Fallback de contingencia retrocompatible
         admin_password = "WARP6SOL"
