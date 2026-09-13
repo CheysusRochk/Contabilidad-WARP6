@@ -8,6 +8,7 @@ import logic
 import reports
 import importer
 import time
+import altair as alt
 
 # Configuración de página
 st.set_page_config(
@@ -17,27 +18,213 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Estilos CSS Personalizados
+# Estilos CSS Personalizados - Diseño Kombai
 st.markdown("""
 <style>
-    .main {
-        background-color: #f8f9fa;
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+    @import url('https://cdn.jsdelivr.net/npm/@tabler/icons-webfont/tabler-icons.min.css');
+
+    .main, .stApp {
+        background-color: #F4F8FC !important;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
+        color: #17324D !important;
     }
+
+    .mono {
+        font-family: 'IBM Plex Mono', monospace !important;
+        font-variant-numeric: tabular-nums !important;
+    }
+
+    /* Kombai Alert Box */
+    .w6-alert-box {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        background-color: #FFF1F0;
+        border: 1px solid #EAC5C2;
+        border-radius: 10px;
+        padding: 14px 20px;
+        margin-bottom: 22px;
+    }
+    .w6-alert-title {
+        color: #8F2E28;
+        font-weight: 600;
+        font-size: 14px;
+    }
+    .w6-alert-sub {
+        color: #9A5B55;
+        font-size: 12.5px;
+        margin-top: 2px;
+    }
+
+    /* Kombai KPIs Grid */
+    .w6-kpi-grid {
+        display: grid;
+        grid-template-columns: 1.8fr 1fr 1fr 1fr;
+        background: #FFFFFF;
+        border: 1px solid #D7E2EC;
+        border-radius: 10px;
+        overflow: hidden;
+        margin-bottom: 22px;
+        box-shadow: 0 1px 3px rgba(23, 50, 77, 0.02);
+    }
+    @media (max-width: 950px) {
+        .w6-kpi-grid {
+            grid-template-columns: 1fr;
+        }
+    }
+    .w6-kpi-col {
+        padding: 18px 22px;
+        border-right: 1px solid #E5EDF4;
+        position: relative;
+    }
+    .w6-kpi-col:last-child {
+        border-right: none;
+    }
+    .w6-kpi-label {
+        font-size: 13px;
+        font-weight: 500;
+        color: #52677C;
+    }
+    .w6-kpi-val-main {
+        font-size: 27px;
+        font-weight: 600;
+        color: #17324D;
+        margin: 4px 0 2px 0;
+        font-family: 'IBM Plex Mono', monospace;
+        font-variant-numeric: tabular-nums;
+        letter-spacing: -0.02em;
+    }
+    .w6-kpi-val {
+        font-size: 23px;
+        font-weight: 600;
+        color: #17324D;
+        margin: 4px 0 2px 0;
+        font-family: 'IBM Plex Mono', monospace;
+        font-variant-numeric: tabular-nums;
+        letter-spacing: -0.02em;
+    }
+    .w6-kpi-sub {
+        font-size: 12px;
+        color: #52677C;
+    }
+
+    /* Kombai Exception Cards */
+    .w6-exc-card {
+        background: #FFFFFF;
+        border: 1px solid #D7E2EC;
+        border-radius: 10px;
+        padding: 18px 22px;
+        box-shadow: 0 1px 3px rgba(23, 50, 77, 0.02);
+        height: 100%;
+    }
+    .w6-exc-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 14px;
+        font-weight: 600;
+        color: #17324D;
+    }
+    .w6-exc-dot-amber {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #B86B13;
+        display: inline-block;
+    }
+    .w6-exc-dot-red {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #B5423C;
+        display: inline-block;
+    }
+    .w6-exc-val-amber {
+        font-size: 24px;
+        font-weight: 600;
+        color: #B86B13;
+        margin: 4px 0 2px 0;
+        font-family: 'IBM Plex Mono', monospace;
+        letter-spacing: -0.02em;
+    }
+    .w6-exc-val-red {
+        font-size: 24px;
+        font-weight: 600;
+        color: #B5423C;
+        margin: 4px 0 2px 0;
+        font-family: 'IBM Plex Mono', monospace;
+        letter-spacing: -0.02em;
+    }
+
+    /* Kombai Table */
+    .w6-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+        background: #FFFFFF;
+    }
+    .w6-table th {
+        padding: 12px 16px;
+        font-weight: 500;
+        color: #52677C;
+        border-bottom: 1px solid #D7E2EC;
+        background: #F8FAFC;
+        font-size: 12px;
+    }
+    .w6-table td {
+        padding: 11px 16px;
+        border-bottom: 1px solid #E5EDF4;
+        color: #17324D;
+    }
+    .w6-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 3px 8px;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 500;
+    }
+    .w6-badge-green {
+        color: #16735A;
+        background: rgba(22, 115, 90, 0.09);
+    }
+    .w6-badge-blue {
+        color: #2B68E8;
+        background: rgba(43, 104, 232, 0.08);
+    }
+    .w6-badge-red {
+        color: #B5423C;
+        background: #FFF1F0;
+        font-weight: 600;
+    }
+
+    /* Section titles */
+    .w6-section-title {
+        font-size: 15px;
+        font-weight: 600;
+        color: #17324D;
+        margin: 18px 0 10px 0;
+    }
+
+    /* General buttons */
     .stButton>button {
         width: 100%;
-        border-radius: 5px;
-        height: 3em;
-        background-color: #0d6efd;
+        border-radius: 6px;
+        height: 2.8em;
+        background-color: #2B68E8;
         color: white;
-    }
-    .metric-card {
-        background-color: white;
-        padding: 20px;
-        border-radius: 10px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        font-weight: 500;
     }
 </style>
 """, unsafe_allow_html=True)
+
+def fmt_bs(val):
+    """Formatea importes numéricos al estilo contable (ej. 184.500,00)."""
+    if val is None or pd.isna(val):
+        return "0,00"
+    return f"{float(val):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 # Inicializar Base de Datos
 db.init_db()
@@ -130,7 +317,12 @@ def main():
         show_importador()
 
 def show_dashboard():
-    st.title("📊 Dashboard Ejecutivo")
+    # Encabezado estilo Kombai
+    st.markdown("""
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
+        <h1 style="font-size: 22px; font-weight: 700; color: #17324D; margin: 0;">Inicio</h1>
+    </div>
+    """, unsafe_allow_html=True)
     
     df = db.get_transactions()
     if df.empty:
@@ -144,26 +336,30 @@ def show_dashboard():
     current_year = date.today().year
     min_date_val = date(current_year, 1, 1) if not df.empty else date.today()
     max_date_val = df['fecha_dt'].max().date() if not pd.isna(df['fecha_dt'].max()) else date.today()
-    min_date_val = min(min_date_val, max_date_val) # En caso de que max_date sea menor al inicio del año
+    min_date_val = min(min_date_val, max_date_val)
     
-    col_d1, col_d2 = st.columns(2)
+    if 'proyecto' not in df.columns:
+        df['proyecto'] = 'General'
+        
+    proyectos_disponibles = df['proyecto'].dropna().unique().tolist()
+    proyectos_disponibles.insert(0, "Todos")
+
+    # Contenedor de controles de filtrado
+    col_d1, col_d2, col_d3 = st.columns([1.5, 1.2, 1.3])
     with col_d1:
         date_range = st.date_input(
             "📅 Rango de Fechas:",
             value=(min_date_val, max_date_val),
             min_value=df['fecha_dt'].min().date() if not pd.isna(df['fecha_dt'].min()) else date.today(),
-            max_value=max(max_date_val, date.today())
+            max_value=max(max_date_val, date.today()),
+            key="dash_date_range"
         )
     with col_d2:
-        # Check if project column exists, default to General if missing
-        if 'proyecto' not in df.columns:
-            df['proyecto'] = 'General'
-            
-        proyectos_disponibles = df['proyecto'].dropna().unique().tolist()
-        proyectos_disponibles.insert(0, "Todos")
-        proyecto_seleccionado = st.selectbox("🏗️ Filtrar por Proyecto", options=proyectos_disponibles, index=0)
+        proyecto_seleccionado = st.selectbox("🏗️ Filtrar por Proyecto", options=proyectos_disponibles, index=0, key="dash_proj_sel")
         
-        excluir_externos = st.checkbox("💼 Excluir 'Gastos Externos/Favores'", value=False, help="Ignora facturas ajenas en los KPIs y gráficas del Dashboard")
+    with col_d3:
+        st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+        excluir_externos = st.checkbox("💼 Excluir gastos externos", value=False, help="Ignora facturas ajenas en los KPIs y gráficas del Dashboard", key="dash_excl_ext")
         
     if len(date_range) == 2:
         start_date, end_date = date_range
@@ -180,7 +376,6 @@ def show_dashboard():
         return
 
     if excluir_externos:
-        # Remover completamente los gastos externos de la vista general del dashboard
         mask_exc = (df['tipo'] == 'Gasto') & df['categoria'].str.lower().str.contains('externo', na=False)
         df = df[~mask_exc]
 
@@ -218,111 +413,216 @@ def show_dashboard():
         if ('pago' in det or 'impuesto' in cat or 'tributo' in cat) and ('it' in det or '400' in det):
             it_pagado_total += row['monto']
 
-    # --- Layout del Dashboard ---
+    # Resumen fiscal mensual para alerta y calendario
+    tax_summary = logic.get_monthly_tax_summary(df.copy())
     
-    # Fila 1: KPIs Principales (Operativos y Fiscales)
-    st.markdown("### 💰 Resumen Operativo y Fiscal")
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.metric("📈 Ventas Operativas Totales", f"Bs {total_ventas:,.2f}", 
-                  delta=f"+ Bs {total_aportes:,.2f} en Aportes" if total_aportes > 0 else None, 
-                  help="Total de ingresos por ventas y servicios (sin contar aportes directos a capital)")
-    
-    with col2:
-        st.metric("📉 Compras y Gastos Totales", f"Bs {total_gastos:,.2f}", 
-                  delta=f"{len(gastos)} transacciones", 
-                  delta_color="off", help="Incluye todos los gastos operativos, compras e impuestos pagados")
-                  
-    with col3:
-        st.metric("🏛️ Débito Fiscal Generado (IVA 13%)", f"Bs {iva_df_total:,.2f}", 
-                  help="El 13% del total de las ventas. Es el IVA que se le debe al fisco antes de descontar compras.")
-                  
-    with col4:
-        st.metric("💸 Total IT Pagado Real", f"Bs {it_pagado_total:,.2f}", 
-                  help="La suma total de todos los pagos de Impuesto a las Transacciones (Form. 400) registrados")
+    # --- ALERTA FISCAL (Estilo Kombai) ---
+    if tax_summary:
+        monthly_data_check = []
+        for mes_k, vals_k in tax_summary.items():
+            dif_k = vals_k['total_determinado'] - vals_k['total_pagado']
+            monthly_data_check.append({'Mes': mes_k, 'Diferencia': dif_k})
+        df_debts = pd.DataFrame(monthly_data_check)
+        deudores = df_debts[df_debts['Diferencia'] > 100]
+        if not deudores.empty:
+            mes_peor = deudores.sort_values('Diferencia', ascending=False).iloc[0]
+            st.markdown(f"""
+            <div class="w6-alert-box">
+                <i class="ti ti-triangle-alert" style="font-size: 22px; color: #B5423C; flex-shrink: 0;"></i>
+                <div style="flex: 1; min-width: 0;">
+                    <div class="w6-alert-title">
+                        Pendiente fiscal en {mes_peor['Mes']}: 
+                        <span class="mono" style="font-weight: 600;">Bs {fmt_bs(mes_peor['Diferencia'])}</span>
+                    </div>
+                    <div class="w6-alert-sub">
+                        IVA e IT determinados superan los pagos registrados. Se recomienda regularizar antes del cierre mensual.
+                    </div>
+                </div>
+                <div style="color: #B5423C; font-weight: 600; font-size: 13px; white-space: nowrap;">
+                    Ver calendario fiscal abajo ↓
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
 
-    st.markdown("---")
-
-    # Fila 2: Alertas y Eficiencia
-    st.markdown("### ⚠️ Eficiencia y Pérdidas Fiscales")
-    c_alert1, c_alert2 = st.columns(2)
+    # --- RESUMEN OPERATIVO Y FISCAL (KPIs Kombai) ---
+    st.markdown('<div class="w6-section-title">Resumen operativo y fiscal</div>', unsafe_allow_html=True)
     
-    with c_alert1:
-        st.metric("🛑 Gastos SIN Factura (No Deducibles)", f"Bs {gastos_no_deducibles:,.2f}", 
-                  delta="Esto aumentará tu IUE anual (25%)", delta_color="inverse", 
-                  help="Dinero gastado que no sirve para reducir impuestos")
+    aportes_html = f'Aportes registrados: <span class="mono" style="font-weight: 600; color: #2B68E8;">Bs {fmt_bs(total_aportes)}</span>' if total_aportes > 0 else 'Total facturado del período'
     
-    with c_alert2:
-        st.metric("💸 Dinero Perdido (Crédito Fiscal 13%)", f"Bs {cf_perdido:,.2f}", 
-                  delta="Dinero regalado por no exigir factura", delta_color="inverse", 
-                  help="Es el 13% de los gastos sin factura. Es IVA que perdiste a favor del Estado.")
+    st.markdown(f"""
+    <div class="w6-kpi-grid">
+        <div class="w6-kpi-col" style="grid-column: span 1.5; padding-bottom: 28px;">
+            <div class="w6-kpi-label">Ventas</div>
+            <div class="w6-kpi-val-main">Bs {fmt_bs(total_ventas)}</div>
+            <div class="w6-kpi-sub">{aportes_html}</div>
+            <svg preserveAspectRatio="none" viewBox="0 0 460 44" style="position: absolute; bottom: 0; left: 0; right: 0; width: 100%; height: 38px; pointer-events: none;">
+                <path d="M0,38 L42,34 L84,36 L126,29 L168,31 L210,24 L252,26 L294,19 L336,21 L378,13 L420,15 L460,6 L460,44 L0,44 Z" fill="rgba(43,104,232,0.06)"></path>
+                <path d="M0,38 L42,34 L84,36 L126,29 L168,31 L210,24 L252,26 L294,19 L336,21 L378,13 L420,15 L460,6" fill="none" stroke="rgba(43,104,232,0.35)" stroke-width="1.5"></path>
+            </svg>
+        </div>
+        <div class="w6-kpi-col">
+            <div class="w6-kpi-label">Gastos</div>
+            <div class="w6-kpi-val">Bs {fmt_bs(total_gastos)}</div>
+            <div class="w6-kpi-sub">{len(gastos)} movimientos</div>
+        </div>
+        <div class="w6-kpi-col">
+            <div class="w6-kpi-label">IVA generado (13%)</div>
+            <div class="w6-kpi-val">Bs {fmt_bs(iva_df_total)}</div>
+            <div class="w6-kpi-sub">Débito fiscal del período</div>
+        </div>
+        <div class="w6-kpi-col">
+            <div class="w6-kpi-label">IT pagado</div>
+            <div class="w6-kpi-val">Bs {fmt_bs(it_pagado_total)}</div>
+            <div class="w6-kpi-sub" style="color: #16735A; display: flex; align-items: center; gap: 4px; font-weight: 500;">
+                <i class="ti ti-badge-check text-[13px]"></i> Form. 400 registrado
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
-    st.markdown("---")
+    # --- ZONA DE EXCEPCIÓN ---
+    col_exc1, col_exc2 = st.columns(2)
+    with col_exc1:
+        st.markdown(f"""
+        <div class="w6-exc-card">
+            <div class="w6-exc-header">
+                <span class="w6-exc-dot-amber"></span>
+                Gastos sin factura
+            </div>
+            <div class="w6-exc-val-amber">Bs {fmt_bs(gastos_no_deducibles)}</div>
+            <div class="w6-kpi-sub">{len(gastos_sin_factura)} movimientos afectados · No reducen la base imponible</div>
+        </div>
+        """, unsafe_allow_html=True)
 
-    # Fila 3: Gráficos
-    st.markdown("### 📊 Análisis Gráfico")
-    cg1, cg2 = st.columns(2)
-    
+    with col_exc2:
+        st.markdown(f"""
+        <div class="w6-exc-card">
+            <div class="w6-exc-header">
+                <span class="w6-exc-dot-red"></span>
+                Crédito fiscal perdido
+            </div>
+            <div class="w6-exc-val-red">Bs {fmt_bs(cf_perdido)}</div>
+            <div class="w6-kpi-sub">13% sobre compras sin respaldo · IVA no aprovechable</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # --- GRÁFICOS ---
+    st.markdown('<div class="w6-section-title" style="margin-top: 24px;">Análisis gráfico</div>', unsafe_allow_html=True)
+    cg1, cg2 = st.columns([5, 7])
+
     with cg1:
-        st.markdown("**Top Categorías de Gasto**")
+        st.markdown('<div style="font-size: 13.5px; font-weight: 600; color: #17324D; margin-bottom: 8px;">Gastos por categoría</div>', unsafe_allow_html=True)
         if not gastos.empty:
-            gastos_cat = gastos.groupby('categoria')['monto'].sum().sort_values(ascending=True) # Ascending para barra horizontal
-            st.bar_chart(gastos_cat, horizontal=True)
+            gastos_cat = gastos.groupby('categoria')['monto'].sum().reset_index()
+            gastos_cat = gastos_cat.sort_values(by='monto', ascending=False).head(7)
+            chart_cat = alt.Chart(gastos_cat).mark_bar(cornerRadius=2, size=16).encode(
+                x=alt.X('monto:Q', title='Monto (Bs)', axis=alt.Axis(format=',.0f', gridColor='#EDF2F7', labelColor='#52677C')),
+                y=alt.Y('categoria:N', sort='-x', title=None, axis=alt.Axis(labelColor='#17324D', labelFontSize=12)),
+                color=alt.Color('monto:Q', scale=alt.Scale(range=['#6A95F0', '#2B68E8']), legend=None),
+                tooltip=[alt.Tooltip('categoria:N', title='Categoría'), alt.Tooltip('monto:Q', title='Monto (Bs)', format=',.2f')]
+            ).properties(height=280).configure_view(strokeWidth=0)
+            st.altair_chart(chart_cat, use_container_width=True)
         else:
             st.info("Sin gastos registrados")
 
     with cg2:
-        st.markdown("**Ingresos vs Gastos en el Tiempo**")
-        # Preparar data para series de tiempo
+        st.markdown('<div style="font-size: 13.5px; font-weight: 600; color: #17324D; margin-bottom: 8px;">Ingresos y gastos por mes</div>', unsafe_allow_html=True)
         if not df.empty:
-            df['fecha'] = pd.to_datetime(df['fecha'])
-            # Agrupar por mes y tipo
-            df_time = df.groupby([df['fecha'].dt.to_period('M'), 'tipo'])['monto'].sum().unstack().fillna(0)
-            df_time.index = df_time.index.astype(str) # Convertir periodo a texto
-            st.line_chart(df_time)
+            df_time = df.copy()
+            df_time['periodo_sort'] = df_time['fecha_dt'].dt.to_period('M')
+            df_time['periodo'] = df_time['fecha_dt'].dt.strftime('%b %Y')
+            time_grouped = df_time.groupby(['periodo_sort', 'periodo', 'tipo'])['monto'].sum().reset_index()
+            time_grouped = time_grouped.sort_values(by='periodo_sort')
+            chart_time = alt.Chart(time_grouped).mark_area(
+                opacity=0.18,
+                line={'strokeWidth': 2},
+                point=alt.OverlayMarkDef(filled=True, size=35)
+            ).encode(
+                x=alt.X('periodo:N', sort=alt.SortField('periodo_sort'), title=None, axis=alt.Axis(labelColor='#52677C', grid=False)),
+                y=alt.Y('monto:Q', title='Bs', axis=alt.Axis(format=',.0f', gridColor='#EDF2F7', labelColor='#52677C')),
+                color=alt.Color('tipo:N', scale=alt.Scale(domain=['Ingreso', 'Gasto'], range=['#2B68E8', '#64748B']), title=None),
+                tooltip=[alt.Tooltip('periodo:N', title='Mes'), alt.Tooltip('tipo:N', title='Tipo'), alt.Tooltip('monto:Q', title='Monto (Bs)', format=',.2f')]
+            ).properties(height=280).configure_view(strokeWidth=0).configure_legend(orient='top', labelColor='#52677C')
+            st.altair_chart(chart_time, use_container_width=True)
         else:
-             st.info("Sin datos para graficar")
+            st.info("Sin datos para graficar")
 
-    st.markdown("---")
-    
-    # Fila 4: Calendario Fiscal (Extraído de Reportes)
-    st.markdown("### 📅 Calendario Fiscal Mensual (Visor Rápido)")
-    st.markdown("*Desglose mes a mes de impuestos generados y los pagos efectivamente realizados*")
-    
-    tax_summary = logic.get_monthly_tax_summary(df)
-        
+    # --- CALENDARIO FISCAL MENSUAL ---
+    st.markdown("""
+    <div style="margin-top: 24px; margin-bottom: 12px;">
+        <div class="w6-section-title" style="margin-bottom: 2px;">Calendario fiscal</div>
+        <div style="font-size: 12.5px; color: #52677C;">Impuesto determinado y pagos registrados por mes.</div>
+    </div>
+    """, unsafe_allow_html=True)
+
     if not tax_summary:
         st.info("No hay datos suficientes para generar el calendario fiscal.")
     else:
-        monthly_data = []
+        table_rows = []
         for mes, vals in tax_summary.items():
-            monthly_data.append({
-                'Mes': mes,
-                'IVA Adeudado': vals['iva_determinado'],
-                'IVA Pagado': vals['iva_pagado'],
-                'IT Adeudado': vals['it_determinado'],
-                'IT Pagado': vals['it_pagado'],
-                'Total Adeudado': vals['total_determinado'],
-                'Total Pagado': vals['total_pagado'],
-                'Diferencia (Deuda Restante)': vals['total_determinado'] - vals['total_pagado']
-            })
+            iva_det = vals['iva_determinado']
+            iva_pag = vals['iva_pagado']
+            it_det = vals['it_determinado']
+            it_pag = vals['it_pagado']
+            tot_det = vals['total_determinado']
+            tot_pag = vals['total_pagado']
+            dif = tot_det - tot_pag
+            
+            if dif > 10:
+                status_pill = '<span class="w6-badge w6-badge-red"><span style="width:6px;height:6px;border-radius:50%;background:#B5423C;display:inline-block;"></span> Pendiente</span>'
+                row_bg = 'background-color: #FFF1F0;'
+                dif_style = 'color: #B5423C; font-weight: 600;'
+            elif dif < -10:
+                status_pill = '<span class="w6-badge w6-badge-blue"><span style="width:6px;height:6px;border-radius:50%;background:#2B68E8;display:inline-block;"></span> Pago en exceso</span>'
+                row_bg = ''
+                dif_style = 'color: #2B68E8;'
+            else:
+                status_pill = '<span class="w6-badge w6-badge-green"><span style="width:6px;height:6px;border-radius:50%;background:#16735A;display:inline-block;"></span> Al día</span>'
+                row_bg = ''
+                dif_style = 'color: #52677C;'
+                
+            table_rows.append(f"""
+            <tr style="{row_bg}">
+                <td style="font-weight: 500; color: #17324D;">{mes}</td>
+                <td class="mono" style="text-align: right;">{fmt_bs(iva_det)}</td>
+                <td class="mono" style="text-align: right;">{fmt_bs(iva_pag)}</td>
+                <td class="mono" style="text-align: right;">{fmt_bs(it_det)}</td>
+                <td class="mono" style="text-align: right;">{fmt_bs(it_pag)}</td>
+                <td class="mono" style="text-align: right; {dif_style}">{fmt_bs(dif)}</td>
+                <td style="padding-left: 20px;">{status_pill}</td>
+            </tr>
+            """)
+            
+        table_html = f"""
+        <div style="border: 1px solid #D7E2EC; border-radius: 10px; overflow-x: auto; background: #FFFFFF; box-shadow: 0 1px 3px rgba(23, 50, 77, 0.02);">
+            <table class="w6-table" style="width: 100%; border-collapse: collapse; font-size: 13px;">
+                <thead>
+                    <tr style="border-bottom: 1px solid #D7E2EC; color: #52677C; background: #F8FAFC;">
+                        <th style="text-align: left; padding: 12px 16px; font-weight: 500;">Mes</th>
+                        <th style="text-align: right; padding: 12px 16px; font-weight: 500;">IVA adeudado</th>
+                        <th style="text-align: right; padding: 12px 16px; font-weight: 500;">IVA pagado</th>
+                        <th style="text-align: right; padding: 12px 16px; font-weight: 500;">IT adeudado</th>
+                        <th style="text-align: right; padding: 12px 16px; font-weight: 500;">IT pagado</th>
+                        <th style="text-align: right; padding: 12px 16px; font-weight: 500;">Diferencia</th>
+                        <th style="text-align: left; padding: 12px 16px; padding-left: 20px; font-weight: 500;">Estado</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {''.join(table_rows)}
+                </tbody>
+            </table>
+        </div>
+        <div style="font-size: 12px; color: #52677C; margin-top: 8px;">
+            Importes en bolivianos (Bs). Diferencia = determinado − pagado.
+        </div>
+        """
+        st.markdown(table_html, unsafe_allow_html=True)
         
-        df_monthly = pd.DataFrame(monthly_data)
-        
-        # Format para mostrar visualmente agradable
-        df_display = df_monthly.copy()
-        for col in df_display.columns:
-            if col != 'Mes':
-                df_display[col] = df_display[col].apply(lambda x: f"Bs {x:,.2f}")
-        
-        st.dataframe(df_display, use_container_width=True, hide_index=True)
-        
-        # Alertas críticas del mes
-        deudores = df_monthly[df_monthly['Diferencia (Deuda Restante)'] > 100]
-        if not deudores.empty:
-             mes_peor = deudores.sort_values('Diferencia (Deuda Restante)', ascending=False).iloc[0]
-             st.error(f"🚨 **Alerta Fiscal**: Tienes una deuda importante de Bs {mes_peor['Diferencia (Deuda Restante)']:,.2f} en **{mes_peor['Mes']}** que falta por pagar regularizar del IVA/IT.")
+    st.markdown("""
+    <div style="padding-top: 24px; font-size: 12px; color: #52677C;">
+        Sistema Contable v1.2 · WARP6 Solutions S.R.L.
+    </div>
+    """, unsafe_allow_html=True)
 
 def show_registro():
     st.title("📝 Registro de Transacciones")
